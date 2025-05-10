@@ -1,17 +1,13 @@
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
-import os
-
 import sqlite3
 import datetime
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 
 MODEL, VIN, WORK = range(3)
-
 
 conn = sqlite3.connect('service_log.db', check_same_thread=False)
 cursor = conn.cursor()
@@ -26,11 +22,16 @@ CREATE TABLE IF NOT EXISTS records (
 ''')
 conn.commit()
 
-
 def get_recent_values(field, limit=5):
-    cursor.execute(f"SELECT DISTINCT {field} FROM records ORDER BY timestamp DESC LIMIT ?", (limit,))
+    cursor.execute(f"""
+        SELECT {field}
+        FROM records
+        WHERE {field} IS NOT NULL
+        GROUP BY {field}
+        ORDER BY MAX(timestamp) DESC
+        LIMIT ?
+    """, (limit,))
     return [row[0] for row in cursor.fetchall()]
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     models = get_recent_values("model")
@@ -43,7 +44,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text("Виберіть модель авто або введіть вручну:", reply_markup=InlineKeyboardMarkup(keyboard))
     return MODEL
 
-
 async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -52,15 +52,23 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Введіть модель авто:")
         return MODEL
     context.user_data["model"] = selected
-    await query.edit_message_text(f"Модель: {selected}\nВведіть останні 6 символів VIN:")
-    return VIN
 
+    vins = get_recent_values("vin", 5)
+    keyboard = [[InlineKeyboardButton(vin, callback_data=f"vin:{vin}")] for vin in vins]
+    keyboard.append([InlineKeyboardButton("Ввести вручну", callback_data="vin:manual")])
+    await query.edit_message_text("Оберіть VIN або введіть вручну:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return VIN
 
 async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["model"] = update.message.text.strip()
-    await update.message.reply_text("Введіть останні 6 символів VIN:")
-    return VIN
+    return await ask_vin(update, context)
 
+async def ask_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    vins = get_recent_values("vin", 5)
+    keyboard = [[InlineKeyboardButton(vin, callback_data=f"vin:{vin}")] for vin in vins]
+    keyboard.append([InlineKeyboardButton("Ввести вручну", callback_data="vin:manual")])
+    await update.message.reply_text("Оберіть VIN або введіть вручну:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return VIN
 
 async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -73,7 +81,6 @@ async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"VIN: {selected}")
     return await show_work_options(update, context)
 
-
 async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vin_input = update.message.text.strip()
     if len(vin_input) != 6 or not vin_input.isalnum():
@@ -81,7 +88,6 @@ async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return VIN
     context.user_data["vin"] = vin_input.upper()
     return await show_work_options(update, context)
-
 
 async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     works = get_recent_values("work", 6)
@@ -136,13 +142,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 if __name__ == '__main__':
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
 
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            CallbackQueryHandler(model_selected, pattern="^model:")  
+            CallbackQueryHandler(model_selected, pattern="^model:")
         ],
         states={
             MODEL: [
@@ -159,9 +165,9 @@ if __name__ == '__main__':
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True  
+        allow_reentry=True
     )
 
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))  
+    app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))
     app.run_polling()
