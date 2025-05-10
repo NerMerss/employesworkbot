@@ -1,6 +1,6 @@
 import os
 import csv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
@@ -34,7 +34,45 @@ def get_recent_values(field, limit=5):
                     break
     return values
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    reply_keyboard = [["➕ Додати запис"]]
+    if is_admin:
+        reply_keyboard.append(["📁 Експорт", "🗑 Очистити"])
+
+    if update.message:
+        await update.message.reply_text("📋 Оберіть дію:", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    elif update.callback_query:
+        await update.callback_query.message.reply_text("📋 Оберіть дію:", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+
+    return
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    reply_keyboard = [["➕ Додати запис"]]
+    if is_admin:
+        reply_keyboard.append(["📁 Експорт", "🗑 Очистити"])
+
+    await update.message.reply_text(
+        "📋 Оберіть дію:",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+    )
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Додати запис", callback_data="restart")],
+    ]
+    if is_admin:
+        keyboard.append([InlineKeyboardButton("📁 Експорт", callback_data="menu_export")])
+        keyboard.append([InlineKeyboardButton("🗑 Очистити", callback_data="menu_clear")])
+
+    await update.message.reply_text("📋 Меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+
     models = get_recent_values("model")
     keyboard = [[InlineKeyboardButton(model, callback_data=f"model:{model}")] for model in models]
     keyboard.append([InlineKeyboardButton("Ввести вручну", callback_data="model:manual")])
@@ -110,6 +148,8 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_record(query.from_user.full_name, context, selected)
     keyboard = [[InlineKeyboardButton("➕ Додати ще", callback_data="restart")]]
     await query.edit_message_text(f"✅ Записано: {selected}", reply_markup=InlineKeyboardMarkup(keyboard))
+    await send_main_menu(update, context)
+    await send_main_menu(update, context)
     return ConversationHandler.END
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,6 +157,7 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_record(update.message.from_user.full_name, context, work_text)
     keyboard = [[InlineKeyboardButton("➕ Додати ще", callback_data="restart")]]
     await update.message.reply_text("✅ Записано. Дякуємо!", reply_markup=InlineKeyboardMarkup(keyboard))
+    await send_main_menu(update, context)
     return ConversationHandler.END
 
 async def save_record(user, context, work_text):
@@ -130,8 +171,18 @@ async def save_record(user, context, work_text):
         writer.writerow(row)
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    if update.callback_query:
+        await update.callback_query.answer()
+        message = update.callback_query.message
+        fake_update = Update(update.update_id, message=message)
+        return await start(fake_update, context)
+    elif update.message:
+        return await start(update, context)
+    elif update.callback_query:
+        return await start(update.callback_query, context)
+    elif update.message:
+        return await start(update, context)
+        await update.callback_query.answer()
     return await start(update, context)
 
 async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,7 +201,17 @@ async def clear_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ У вас немає прав для очищення бази.")
         return
 
-    args = update.message.text.strip().split()
+    keyboard = [
+        ["🧹 Очистити все"],
+        ["🗂 Очистити певні записи"],
+        ["⬅ Повернутися до меню"]
+    ]
+    from telegram import ReplyKeyboardMarkup
+    await update.message.reply_text(
+        "🔧 Оберіть варіант очищення:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return
     if len(args) > 1:
         try:
             arg = args[1]
@@ -216,6 +277,56 @@ async def confirm_partial_clear(update: Update, context: ContextTypes.DEFAULT_TY
     await update.callback_query.edit_message_text(f"🗑 Видалено записи: {', '.join(ids_to_remove)}")
 
 
+async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    if query.data == "menu_export" and is_admin:
+        if not os.path.exists(CSV_FILE):
+            await query.edit_message_text("❌ CSV файл не знайдено.")
+        else:
+            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(CSV_FILE, "rb"), filename="records.csv")
+
+    elif query.data == "menu_clear" and is_admin:
+        keyboard = [[InlineKeyboardButton("Так, очистити ВСЕ", callback_data="confirm_clear")]]
+        await query.edit_message_text("❗ Ви впевнені, що хочете видалити ВСІ записи?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def confirm_clear_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("✅ Так, очистити", callback_data="confirm_clear")]]
+    await update.message.reply_text("❗ Ви впевнені, що хочете видалити ВСІ записи?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def prompt_partial_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✏️ Введіть номери записів, які потрібно видалити. Наприклад: 
+`1`, `2-4`, `1,3`, `1-2,5-6`",
+        parse_mode="Markdown"
+    )
+async def handle_partial_clear_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_clear_input"):
+        return
+    text = update.message.text.strip()
+    import re
+    ids = set()
+    for part in text.split(","):
+        part = part.strip()
+        if re.fullmatch(r"\d+", part):
+            ids.add(part)
+        elif re.fullmatch(r"\d+-\d+", part):
+            start, end = map(int, part.split("-"))
+            ids.update(str(i) for i in range(start, end + 1))
+    if not ids:
+        await update.message.reply_text("❗ Неправильний формат. Спробуйте ще раз.")
+        return
+    context.user_data.pop("awaiting_clear_input", None)
+    confirm_text = f"🔸 Ви вибрали для видалення записи: {', '.join(sorted(ids))}. Підтвердити?"
+    keyboard = [[InlineKeyboardButton("✅ Так, видалити ці записи", callback_data=f"confirm_partial_clear:{','.join(sorted(ids))}")]]
+    await update.message.reply_text(confirm_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано.")
     return ConversationHandler.END
@@ -226,7 +337,7 @@ if __name__ == '__main__':
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
+            CommandHandler("start", send_main_menu),
             CallbackQueryHandler(model_selected, pattern="^model:")
         ],
         states={
@@ -249,8 +360,17 @@ if __name__ == '__main__':
 
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))
+    app.add_handler(CommandHandler("menu", send_main_menu))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^➕ Додати запис$"), restart))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📁 Експорт$"), export_csv))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗑 Очистити$"), clear_csv))
+    app.add_handler(CallbackQueryHandler(handle_menu_buttons, pattern="^menu_"))
     app.add_handler(CommandHandler("export", export_csv))
     app.add_handler(CommandHandler("clear", clear_csv))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🧹 Очистити все$"), confirm_clear_prompt))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗂 Очистити певні записи$"), prompt_partial_clear))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^⬅ Повернутися до меню$"), cancel))
     app.add_handler(CallbackQueryHandler(confirm_clear_csv, pattern="^confirm_clear$"))
     app.add_handler(CallbackQueryHandler(confirm_partial_clear, pattern="^confirm_partial_clear:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_partial_clear_input))
     app.run_polling()
