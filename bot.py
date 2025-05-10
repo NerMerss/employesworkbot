@@ -15,7 +15,7 @@ ADMIN_USERNAMES = os.getenv("ADMIN_USERNAMES", "").split(",")  # список Te
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "user", "model", "vin", "work"])
+        writer.writerow(["id", "timestamp", "user", "model", "vin", "work"])
 
 def get_recent_values(field, limit=5):
     values = []
@@ -121,7 +121,10 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_record(user, context, work_text):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [timestamp, user, context.user_data["model"], context.user_data["vin"], work_text]
+    with open(CSV_FILE, newline='', encoding='utf-8') as f:
+        existing_rows = list(csv.reader(f))
+    next_id = len(existing_rows) if existing_rows else 1
+    row = [str(next_id), timestamp, user, context.user_data["model"], context.user_data["vin"], work_text]
     with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(row)
@@ -147,10 +150,38 @@ async def clear_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ У вас немає прав для очищення бази.")
         return
 
-    keyboard = [[InlineKeyboardButton("Так, очистити", callback_data="confirm_clear")]]
+    args = update.message.text.strip().split()
+    if len(args) > 1:
+        try:
+            arg = args[1]
+            if "-" in arg:
+                start_id, end_id = map(int, arg.split("-"))
+                ids_to_remove = set(str(i) for i in range(start_id, end_id + 1))
+            else:
+                ids_to_remove = {str(int(arg))}
+        except ValueError:
+            await update.message.reply_text("❗ Неправильний формат. Використовуйте /clear або /clear 12 або /clear 5-8")
+            return
+
+        with open(CSV_FILE, newline='', encoding='utf-8') as f:
+            rows = list(csv.reader(f))
+        header, data = rows[0], rows[1:]
+        new_data = [row for row in data if row[0] not in ids_to_remove]
+        keyboard = [[InlineKeyboardButton("✅ Так, видалити ці записи", callback_data=f"confirm_partial_clear:{','.join(sorted(ids_to_remove))}")]]
+        await update.message.reply_text(
+            f"🔸 Ви вибрали для видалення записи: {', '.join(sorted(ids_to_remove))}. Підтвердити?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+        return
+
+    keyboard = [[InlineKeyboardButton("Так, очистити ВСЕ", callback_data="confirm_clear")]]
     await update.message.reply_text(
         "❗ Ви впевнені, що хочете видалити ВСІ записи?",
         reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    await update.message.reply_text(
+        "Якщо хочете видалити певний запис або проміжок — напишіть номер у форматі \"1\" або \"1-20\" нижче повідомленням."
     )
 
 
@@ -165,6 +196,24 @@ async def confirm_clear_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         writer.writerow(["timestamp", "user", "model", "vin", "work"])
     await update.callback_query.edit_message_text("🗑 Усі записи видалено.")
     await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.callback_query.message.message_id, delay=5)
+
+
+async def confirm_partial_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    if f"@{username}" not in ADMIN_USERNAMES:
+        await update.callback_query.answer("⛔ Немає доступу.", show_alert=True)
+        return
+    await update.callback_query.answer()
+    ids_to_remove = update.callback_query.data.split(":")[1].split(",")
+    with open(CSV_FILE, newline='', encoding='utf-8') as f:
+        rows = list(csv.reader(f))
+    header, data = rows[0], rows[1:]
+    new_data = [row for row in data if row[0] not in ids_to_remove]
+    with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(new_data)
+    await update.callback_query.edit_message_text(f"🗑 Видалено записи: {', '.join(ids_to_remove)}")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,4 +252,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("export", export_csv))
     app.add_handler(CommandHandler("clear", clear_csv))
     app.add_handler(CallbackQueryHandler(confirm_clear_csv, pattern="^confirm_clear$"))
+    app.add_handler(CallbackQueryHandler(confirm_partial_clear, pattern="^confirm_partial_clear:"))
     app.run_polling()
