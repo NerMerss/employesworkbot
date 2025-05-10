@@ -208,12 +208,20 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         executors = {username: user_name}
         executors.update(WORKERS)
     
-    # Створюємо кнопки з іменами
+    # Створюємо кнопки тільки з іменами
     buttons = []
     for user_id, name in executors.items():
+        # Додаємо тільки ім'я, але зберігаємо user_id у callback_data
         buttons.append([InlineKeyboardButton(
-            f"{user_id} {name}",
-            callback_data=f"executor:{user_id}:{name}"
+            name,  # Виводимо тільки ім'я
+            callback_data=f"executor:{user_id}:{name}"  # Але передаємо і нік
+        )])
+    
+    # Додаємо "Я" першим пунктом для керівників
+    if user_level == "manager":
+        buttons.insert(0, [InlineKeyboardButton(
+            f"Я ({user_name})",
+            callback_data=f"executor:{username}:{user_name}"
         )])
     
     await update.message.reply_text(
