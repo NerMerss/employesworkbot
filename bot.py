@@ -35,6 +35,27 @@ def get_recent_values(field, limit=5):
     return values
 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # показать меню-клавиатуру
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    reply_keyboard = [["➕ Додати запис"]]
+    if is_admin:
+        reply_keyboard.append(["📁 Експорт", "🗑 Очистити"])
+
+    if update.message:
+        await update.message.reply_text(
+            "📋 Оберіть дію:",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+        )
+    else:
+        await update.callback_query.message.reply_text(
+            "📋 Оберіть дію:",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+        )
+
+    # сразу запускаем добавление записи
+    return await start(update, context)
     username = update.effective_user.username
     is_admin = f"@{username}" in ADMIN_USERNAMES
 
@@ -268,7 +289,7 @@ if __name__ == '__main__':
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
+            CommandHandler("start", send_main_menu),
             CallbackQueryHandler(model_selected, pattern="^model:")
         ],
         states={
