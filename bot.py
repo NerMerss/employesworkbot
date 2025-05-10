@@ -28,6 +28,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Клавіатури
+ADMIN_MENU_MARKUP = ReplyKeyboardMarkup(
+    [
+        ["➕ Додати запис"],
+        ["🗑 Видалити записи", "📤 Експорт даних"],
+        ["🔙 Головне меню"]
+    ],
+    resize_keyboard=True
+)
+
+DELETE_MENU_MARKUP = ReplyKeyboardMarkup(
+    [
+        ["❌ Видалити ВСЕ"],
+        ["🔢 Видалити за ID"],
+        ["🔙 Назад"]
+    ],
+    resize_keyboard=True
+)
+
+CONFIRM_MARKUP = ReplyKeyboardMarkup(
+    [
+        ["✅ Так", "❌ Ні"],
+        ["🔙 Назад"]
+    ],
+    resize_keyboard=True
+)
+
 class CSVManager:
     """Клас для роботи з CSV файлом"""
     HEADERS = ["id", "timestamp", "user", "model", "vin", "work"]
@@ -78,6 +105,28 @@ class CSVManager:
                 work_text
             ])
         return next_id
+    
+    @staticmethod
+    def delete_records(ids_to_remove: Optional[Set[str]] = None) -> bool:
+        """Видаляє записи за ID або всі записи"""
+        try:
+            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.reader(f))
+            
+            if not rows:
+                return False
+            
+            header, data = rows[0], rows[1:]
+            new_data = [row for row in data if not ids_to_remove or row[0] not in ids_to_remove]
+            
+            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+                writer.writerows(new_data)
+            return True
+        except Exception as e:
+            logger.error(f"Помилка при видаленні: {e}")
+            return False
 
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     """Створює інлайн-клавіатуру з варіантами"""
@@ -95,26 +144,35 @@ def is_admin(update: Update) -> bool:
     username = update.effective_user.username
     return f"@{username}" in ADMIN_USERNAMES if username else False
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Початок взаємодії з ботом"""
+    if is_admin(update):
+        await show_admin_menu(update, context)
+        return ConversationHandler.END
+    
+    models = CSVManager.get_recent_values("model")
+    await update.message.reply_text(
+        "Виберіть модель авто або введіть вручну:",
+        reply_markup=create_keyboard(models, "model")
+    )
+    return MODEL
+
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показує меню адміністратора"""
     if not is_admin(update):
         await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
-    keyboard = ReplyKeyboardMarkup(
-        [["➕ Додати запис"], ["📤 Експорт даних"]],
-        resize_keyboard=True
-    )
     await update.message.reply_text(
         "Меню адміністратора:",
-        reply_markup=keyboard
+        reply_markup=ADMIN_MENU_MARKUP
     )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Початок взаємодії з ботом"""
-    if is_admin(update):
-        await show_admin_menu(update, context)
-        return ConversationHandler.END
+async def admin_add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Починає процес додавання запису для адміністратора"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
     
     models = CSVManager.get_recent_values("model")
     await update.message.reply_text(
@@ -221,12 +279,12 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, w
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            f"✅ Записано (ID: {record_id}): {work_text}",
+            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
             reply_markup=keyboard
         )
     else:
         await update.message.reply_text(
-            f"✅ Записано (ID: {record_id}). Дякуємо!",
+            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
             reply_markup=keyboard
         )
 
@@ -253,14 +311,83 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return MODEL
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Скасовує поточну бесіду"""
+async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показує меню видалення"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
     await update.message.reply_text(
-        "❌ Дію скасовано",
+        "Оберіть тип видалення:",
+        reply_markup=DELETE_MENU_MARKUP
+    )
+
+async def ask_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запитує підтвердження для видалення всіх записів"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
+    await update.message.reply_text(
+        "❗ Ви впевнені, що хочете видалити ВСІ записи?",
+        reply_markup=CONFIRM_MARKUP
+    )
+    context.user_data["delete_type"] = "all"
+
+async def ask_ids_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запитує ID записів для видалення"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
+    await update.message.reply_text(
+        "Введіть ID записів для видалення (наприклад: 1, 2-5, 7):",
         reply_markup=ReplyKeyboardRemove()
     )
-    context.user_data.clear()
-    return ConversationHandler.END
+    context.user_data["delete_type"] = "selected"
+
+async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Виконує видалення записів"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
+    delete_type = context.user_data.get("delete_type")
+    
+    if delete_type == "all":
+        if update.message.text == "✅ Так":
+            success = CSVManager.delete_records()
+            msg = "🗑 Всі записи видалено!" if success else "❌ Помилка при видаленні"
+        else:
+            msg = "❌ Видалення скасовано"
+    elif delete_type == "selected":
+        try:
+            ids_to_remove = parse_ids(update.message.text)
+            success = CSVManager.delete_records(ids_to_remove)
+            msg = f"🗑 Видалено записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Помилка при видаленні"
+        except ValueError:
+            msg = "❗ Невірний формат ID. Спробуйте ще раз."
+            await update.message.reply_text(msg)
+            return
+    
+    await update.message.reply_text(
+        msg,
+        reply_markup=ADMIN_MENU_MARKUP
+    )
+    context.user_data.pop("delete_type", None)
+
+def parse_ids(id_str: str) -> Set[str]:
+    """Розбирає рядок з ID на множину"""
+    ids = set()
+    parts = [p.strip() for p in id_str.split(",") if p.strip()]
+    
+    for part in parts:
+        if "-" in part:
+            start, end = map(int, part.split("-"))
+            ids.update(str(i) for i in range(start, end + 1))
+        else:
+            ids.add(part)
+    return ids
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Експортує дані у CSV"""
@@ -277,6 +404,41 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         filename='car_records.csv'
     )
 
+async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обробляє команди адміністратора"""
+    text = update.message.text
+    
+    if text == "➕ Додати запис":
+        await admin_add_record(update, context)
+    elif text == "🗑 Видалити записи":
+        await show_delete_menu(update, context)
+    elif text == "📤 Експорт даних":
+        await export_data(update, context)
+    elif text == "🔙 Головне меню":
+        await update.message.reply_text(
+            "Головне меню",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    elif text == "❌ Видалити ВСЕ":
+        await ask_delete_confirmation(update, context)
+    elif text == "🔢 Видалити за ID":
+        await ask_ids_to_delete(update, context)
+    elif text == "🔙 Назад":
+        await show_admin_menu(update, context)
+    elif text in ["✅ Так", "❌ Ні"]:
+        await execute_deletion(update, context)
+    elif "delete_type" in context.user_data:
+        await execute_deletion(update, context)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Скасовує поточну бесіду"""
+    await update.message.reply_text(
+        "❌ Дію скасовано",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
 def main() -> None:
     """Запускає бота"""
     if not (token := os.getenv("BOT_TOKEN")):
@@ -291,6 +453,7 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
+            MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record),
             CallbackQueryHandler(restart_conversation, pattern="^restart$")
         ],
         states={
@@ -313,7 +476,7 @@ def main() -> None:
     
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("admin", show_admin_menu))
-    app.add_handler(MessageHandler(filters.Regex("^📤 Експорт даних$"), export_data))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_commands))
     
     logger.info("Бот запущений...")
     app.run_polling()
