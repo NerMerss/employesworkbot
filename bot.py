@@ -1,6 +1,6 @@
 import os
 import csv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
@@ -34,7 +34,32 @@ def get_recent_values(field, limit=5):
                     break
     return values
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    reply_keyboard = [["➕ Додати запис"]]
+    if is_admin:
+        reply_keyboard.append(["📁 Експорт", "🗑 Очистити"])
+
+    await update.message.reply_text(
+        "📋 Оберіть дію:",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+    )
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Додати запис", callback_data="restart")],
+    ]
+    if is_admin:
+        keyboard.append([InlineKeyboardButton("📁 Експорт", callback_data="menu_export")])
+        keyboard.append([InlineKeyboardButton("🗑 Очистити", callback_data="menu_clear")])
+
+    await update.message.reply_text("📋 Меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+
     models = get_recent_values("model")
     keyboard = [[InlineKeyboardButton(model, callback_data=f"model:{model}")] for model in models]
     keyboard.append([InlineKeyboardButton("Ввести вручну", callback_data="model:manual")])
@@ -216,6 +241,23 @@ async def confirm_partial_clear(update: Update, context: ContextTypes.DEFAULT_TY
     await update.callback_query.edit_message_text(f"🗑 Видалено записи: {', '.join(ids_to_remove)}")
 
 
+async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    username = update.effective_user.username
+    is_admin = f"@{username}" in ADMIN_USERNAMES
+
+    if query.data == "menu_export" and is_admin:
+        if not os.path.exists(CSV_FILE):
+            await query.edit_message_text("❌ CSV файл не знайдено.")
+        else:
+            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(CSV_FILE, "rb"), filename="records.csv")
+
+    elif query.data == "menu_clear" and is_admin:
+        keyboard = [[InlineKeyboardButton("Так, очистити ВСЕ", callback_data="confirm_clear")]]
+        await query.edit_message_text("❗ Ви впевнені, що хочете видалити ВСІ записи?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано.")
     return ConversationHandler.END
@@ -249,6 +291,11 @@ if __name__ == '__main__':
 
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))
+    app.add_handler(CommandHandler("menu", send_main_menu))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^➕ Додати запис$"), restart))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📁 Експорт$"), export_csv))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗑 Очистити$"), clear_csv))
+    app.add_handler(CallbackQueryHandler(handle_menu_buttons, pattern="^menu_"))
     app.add_handler(CommandHandler("export", export_csv))
     app.add_handler(CommandHandler("clear", clear_csv))
     app.add_handler(CallbackQueryHandler(confirm_clear_csv, pattern="^confirm_clear$"))
