@@ -19,7 +19,7 @@ import datetime
 MODEL, VIN, WORK = range(3)
 CSV_FILE = "records.csv"
 RECENT_ITEMS_LIMIT = 5
-ADMIN_USERNAMES = {f"@{u.strip()}" for u in os.getenv("ADMIN_USERNAMES", "").split(",") if u.strip()}
+ADMIN_USERNAMES = {u.strip() for u in os.getenv("ADMIN_USERNAMES", "").split(",") if u.strip()}
 
 # Налаштування логування
 logging.basicConfig(
@@ -144,8 +144,10 @@ def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
 
 def is_admin(update: Update) -> bool:
     """Перевіряє, чи є користувач адміністратором"""
-    username = f"@{update.effective_user.username}"
-    return username in ADMIN_USERNAMES
+    if not update.effective_user:
+        return False
+    username = update.effective_user.username
+    return f"@{username}" in ADMIN_USERNAMES if username else False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Початок взаємодії з ботом"""
