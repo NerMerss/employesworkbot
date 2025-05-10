@@ -149,15 +149,16 @@ async def handle_partial_clear_input(update: Update, context: ContextTypes.DEFAU
     if not ids:
         await update.message.reply_text("❗ Неправильний формат. Спробуйте ще раз.")
         return
-    with open(CSV_FILE, newline='', encoding='utf-8') as f:
-        rows = list(csv.reader(f))
-    header, data = rows[0], rows[1:]
-    remaining = [row for row in data if row[0] not in ids]
-    with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(remaining)
-    await update.message.reply_text(f"🗑 Видалено записи: {', '.join(sorted(ids))}")
+    context.user_data["pending_delete_ids"] = ids
+    keyboard = [
+        [InlineKeyboardButton("✅ Так, видалити", callback_data="confirm_partial_clear")],
+        [InlineKeyboardButton("❌ Ні, скасувати", callback_data="cancel_clear")]
+    ]
+    await update.message.reply_text(
+        f"🔸 Ви вибрали для видалення записи: {', '.join(sorted(ids))}. Ви впевнені?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано.")
