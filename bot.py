@@ -78,33 +78,6 @@ class CSVManager:
                 work_text
             ])
         return next_id
-    
-    @staticmethod
-    def export_records() -> Optional[str]:
-        """Повертає шлях до CSV файлу, якщо він існує"""
-        return CSV_FILE if os.path.exists(CSV_FILE) else None
-    
-    @staticmethod
-    def clear_records(ids_to_remove: Optional[Set[str]] = None) -> bool:
-        """Очищає всі або конкретні записи"""
-        try:
-            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
-                rows = list(csv.reader(f))
-            
-            if not rows:
-                return False
-            
-            header, data = rows[0], rows[1:]
-            new_data = [row for row in data if not ids_to_remove or row[0] not in ids_to_remove]
-            
-            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
-                writer.writerows(new_data)
-            return True
-        except Exception as e:
-            logger.error(f"Помилка при очищенні: {e}")
-            return False
 
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     """Створює інлайн-клавіатуру з варіантами"""
@@ -121,6 +94,21 @@ def is_admin(update: Update) -> bool:
         return False
     username = update.effective_user.username
     return f"@{username}" in ADMIN_USERNAMES if username else False
+
+async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показує меню адміністратора"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
+    keyboard = ReplyKeyboardMarkup(
+        [["➕ Додати запис"], ["📤 Експорт даних"]],
+        resize_keyboard=True
+    )
+    await update.message.reply_text(
+        "Меню адміністратора:",
+        reply_markup=keyboard
+    )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Початок взаємодії з ботом"""
@@ -223,24 +211,22 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, work_text: str) -> None:
-    """Зберігає запис і показує кнопку 'Додати ще'"""
+    """Зберігає запис і підтверджує"""
     username = update.effective_user.full_name
     record_id = CSVManager.save_record(context.user_data, username, work_text)
     
-    # Створюємо кнопку
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати ще", callback_data="restart")]
     ])
     
-    # Відправляємо повідомлення
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
+            f"✅ Записано (ID: {record_id}): {work_text}",
             reply_markup=keyboard
         )
     else:
         await update.message.reply_text(
-            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
+            f"✅ Записано (ID: {record_id}). Дякуємо!",
             reply_markup=keyboard
         )
 
@@ -275,6 +261,21 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     context.user_data.clear()
     return ConversationHandler.END
+
+async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Експортує дані у CSV"""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
+        return
+    
+    if not os.path.exists(CSV_FILE):
+        await update.message.reply_text("❌ Файл даних не знайдено")
+        return
+    
+    await update.message.reply_document(
+        document=open(CSV_FILE, 'rb'),
+        filename='car_records.csv'
+    )
 
 def main() -> None:
     """Запускає бота"""
@@ -311,6 +312,9 @@ def main() -> None:
     )
     
     app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("admin", show_admin_menu))
+    app.add_handler(MessageHandler(filters.Regex("^📤 Експорт даних$"), export_data))
+    
     logger.info("Бот запущений...")
     app.run_polling()
 
