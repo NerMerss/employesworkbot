@@ -167,7 +167,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_level = get_user_level(username)
     
     if not user_level:
-        await update.message.reply_text(f"⛔ Ваш нік: {username}\nДоступні власники: {', '.join(OWNERS.keys())}")
+        await update.message.reply_text("⛔ У вас немає доступу до цього бота")
         return
     
     if user_level == "owner":
