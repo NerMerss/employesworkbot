@@ -32,8 +32,14 @@ logger = logging.getLogger(__name__)
 ADMIN_MENU_MARKUP = ReplyKeyboardMarkup(
     [
         ["➕ Додати запис"],
-        ["🗑 Видалити записи", "📤 Експорт даних"],
-        ["🔙 Головне меню"]
+        ["🗑 Видалити записи", "📤 Експорт даних"]
+    ],
+    resize_keyboard=True
+)
+
+USER_MENU_MARKUP = ReplyKeyboardMarkup(
+    [
+        ["➕ Додати запис"]
     ],
     resize_keyboard=True
 )
@@ -49,8 +55,7 @@ DELETE_MENU_MARKUP = ReplyKeyboardMarkup(
 
 CONFIRM_MARKUP = ReplyKeyboardMarkup(
     [
-        ["✅ Так", "❌ Ні"],
-        ["🔙 Назад"]
+        ["✅ Так", "❌ Ні"]
     ],
     resize_keyboard=True
 )
@@ -144,36 +149,21 @@ def is_admin(update: Update) -> bool:
     username = update.effective_user.username
     return f"@{username}" in ADMIN_USERNAMES if username else False
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Початок взаємодії з ботом"""
     if is_admin(update):
-        await show_admin_menu(update, context)
-        return ConversationHandler.END
-    
-    models = CSVManager.get_recent_values("model")
-    await update.message.reply_text(
-        "Виберіть модель авто або введіть вручну:",
-        reply_markup=create_keyboard(models, "model")
-    )
-    return MODEL
+        await update.message.reply_text(
+            "Меню адміністратора:",
+            reply_markup=ADMIN_MENU_MARKUP
+        )
+    else:
+        await update.message.reply_text(
+            "Оберіть дію:",
+            reply_markup=USER_MENU_MARKUP
+        )
 
-async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показує меню адміністратора"""
-    if not is_admin(update):
-        await update.message.reply_text("⛔ У вас немає прав адміністратора")
-        return
-    
-    await update.message.reply_text(
-        "Меню адміністратора:",
-        reply_markup=ADMIN_MENU_MARKUP
-    )
-
-async def admin_add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Починає процес додавання запису для адміністратора"""
-    if not is_admin(update):
-        await update.message.reply_text("⛔ У вас немає прав адміністратора")
-        return
-    
+async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Починає процес додавання запису"""
     models = CSVManager.get_recent_values("model")
     await update.message.reply_text(
         "Виберіть модель авто або введіть вручну:",
@@ -358,22 +348,21 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if update.message.text == "✅ Так":
             success = CSVManager.delete_records()
             msg = "🗑 Всі записи видалено!" if success else "❌ Помилка при видаленні"
+            await update.message.reply_text(msg, reply_markup=ADMIN_MENU_MARKUP)
         else:
-            msg = "❌ Видалення скасовано"
+            await update.message.reply_text("❌ Видалення скасовано", reply_markup=ADMIN_MENU_MARKUP)
     elif delete_type == "selected":
         try:
             ids_to_remove = parse_ids(update.message.text)
             success = CSVManager.delete_records(ids_to_remove)
             msg = f"🗑 Видалено записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Помилка при видаленні"
+            await update.message.reply_text(msg, reply_markup=ADMIN_MENU_MARKUP)
         except ValueError:
-            msg = "❗ Невірний формат ID. Спробуйте ще раз."
-            await update.message.reply_text(msg)
-            return
+            await update.message.reply_text(
+                "❗ Невірний формат ID. Спробуйте ще раз.",
+                reply_markup=ADMIN_MENU_MARKUP
+            )
     
-    await update.message.reply_text(
-        msg,
-        reply_markup=ADMIN_MENU_MARKUP
-    )
     context.user_data.pop("delete_type", None)
 
 def parse_ids(id_str: str) -> Set[str]:
@@ -404,37 +393,34 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         filename='car_records.csv'
     )
 
-async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробляє команди адміністратора"""
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обробляє текстові повідомлення"""
     text = update.message.text
     
     if text == "➕ Додати запис":
-        await admin_add_record(update, context)
-    elif text == "🗑 Видалити записи":
+        await add_record(update, context)
+    elif text == "🗑 Видалити записи" and is_admin(update):
         await show_delete_menu(update, context)
-    elif text == "📤 Експорт даних":
+    elif text == "📤 Експорт даних" and is_admin(update):
         await export_data(update, context)
-    elif text == "🔙 Головне меню":
-        await update.message.reply_text(
-            "Головне меню",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    elif text == "❌ Видалити ВСЕ":
+    elif text == "❌ Видалити ВСЕ" and is_admin(update):
         await ask_delete_confirmation(update, context)
-    elif text == "🔢 Видалити за ID":
+    elif text == "🔢 Видалити за ID" and is_admin(update):
         await ask_ids_to_delete(update, context)
-    elif text == "🔙 Назад":
-        await show_admin_menu(update, context)
-    elif text in ["✅ Так", "❌ Ні"]:
+    elif text == "🔙 Назад" and is_admin(update):
+        await start(update, context)
+    elif text in ["✅ Так", "❌ Ні"] and is_admin(update):
         await execute_deletion(update, context)
-    elif "delete_type" in context.user_data:
+    elif "delete_type" in context.user_data and is_admin(update):
         await execute_deletion(update, context)
+    else:
+        await update.message.reply_text("Оберіть дію з меню")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Скасовує поточну бесіду"""
     await update.message.reply_text(
         "❌ Дію скасовано",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=USER_MENU_MARKUP if not is_admin(update) else ADMIN_MENU_MARKUP
     )
     context.user_data.clear()
     return ConversationHandler.END
@@ -453,7 +439,7 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record),
+            MessageHandler(filters.Regex("^➕ Додати запис$"), add_record),
             CallbackQueryHandler(restart_conversation, pattern="^restart$")
         ],
         states={
@@ -475,8 +461,7 @@ def main() -> None:
     )
     
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("admin", show_admin_menu))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_commands))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     
     logger.info("Бот запущений...")
     app.run_polling()
