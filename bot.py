@@ -144,12 +144,15 @@ class CSVManager:
 
 def get_user_level(username: str) -> Optional[str]:
     """Повертає рівень доступу користувача"""
-    username = f"@{username}" if not username.startswith("@") else username
-    if username in OWNERS:
+    username = username.lower().strip()  # Додано lower() для нечутливості до регістру
+    if not username.startswith("@"):
+        username = f"@{username}"
+        
+    if username in {k.lower(): v for k, v in OWNERS.items()}:
         return "owner"
-    elif username in MANAGERS:
+    elif username in {k.lower(): v for k, v in MANAGERS.items()}:
         return "manager"
-    elif username in WORKERS:
+    elif username in {k.lower(): v for k, v in WORKERS.items()}:
         return "worker"
     return None
 
