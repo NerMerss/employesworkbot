@@ -1,37 +1,38 @@
 import os
+import csv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
-import sqlite3
 import datetime
 
 MODEL, VIN, WORK = range(3)
+CSV_FILE = "records.csv"
+ADMIN_USERNAMES = ["@NerMers"]  # список Telegram username админов
 
-conn = sqlite3.connect('service_log.db', check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS records (
-    timestamp TEXT,
-    user TEXT,
-    model TEXT,
-    vin TEXT,
-    work TEXT
-)
-''')
-conn.commit()
+# Убедимся, что CSV существует с заголовками
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "user", "model", "vin", "work"])
 
 def get_recent_values(field, limit=5):
-    cursor.execute(f"""
-        SELECT {field}
-        FROM records
-        WHERE {field} IS NOT NULL
-        GROUP BY {field}
-        ORDER BY MAX(timestamp) DESC
-        LIMIT ?
-    """, (limit,))
-    return [row[0] for row in cursor.fetchall()]
+    values = []
+    seen = set()
+    if not os.path.exists(CSV_FILE):
+        return []
+    with open(CSV_FILE, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)[::-1]  # Сначала последние
+        for row in rows:
+            val = row.get(field)
+            if val and val not in seen:
+                seen.add(val)
+                values.append(val)
+                if len(values) >= limit:
+                    break
+    return values
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     models = get_recent_values("model")
@@ -120,22 +121,25 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_record(user, context, work_text):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute(
-        "INSERT INTO records VALUES (?, ?, ?, ?, ?)",
-        (
-            timestamp,
-            user,
-            context.user_data["model"],
-            context.user_data["vin"],
-            work_text
-        )
-    )
-    conn.commit()
+    row = [timestamp, user, context.user_data["model"], context.user_data["vin"], work_text]
+    with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     return await start(update, context)
+
+async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    if f"@{username}" not in ADMIN_USERNAMES:
+        await update.message.reply_text("⛔ У вас немає доступу до експорту.")
+        return
+    if not os.path.exists(CSV_FILE):
+        await update.message.reply_text("❌ CSV файл не знайдено.")
+        return
+    await update.message.reply_document(document=open(CSV_FILE, "rb"), filename="records.csv")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано.")
@@ -170,4 +174,5 @@ if __name__ == '__main__':
 
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))
+    app.add_handler(CommandHandler("export", export_csv))
     app.run_polling()
