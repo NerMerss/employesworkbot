@@ -15,33 +15,33 @@ from telegram.ext import (
 )
 import datetime
 
-# Constants
+# Константи
 MODEL, VIN, WORK = range(3)
 CSV_FILE = "records.csv"
 RECENT_ITEMS_LIMIT = 5
 ADMIN_USERNAMES = {f"@{u.strip()}" for u in os.getenv("ADMIN_USERNAMES", "").split(",") if u.strip()}
 
-# Configure logging
+# Налаштування логування
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Keyboard Markups
+# Клавіатури
 ADMIN_MENU_MARKUP = ReplyKeyboardMarkup(
     [
-        ["➕ Добавить запись"],
-        ["🗑 Очистить записи", "📤 Экспорт"],
-        ["🔙 Главное меню"]
+        ["➕ Додати запис"],
+        ["🗑 Очистити записи", "📤 Експорт"],
+        ["🔙 Головне меню"]
     ],
     resize_keyboard=True
 )
 
 CLEAR_MENU_MARKUP = ReplyKeyboardMarkup(
     [
-        ["❌ Очистить ВСЁ"],
-        ["🔢 Очистить по ID"],
+        ["❌ Очистити ВСЕ"],
+        ["🔢 Очистити за ID"],
         ["🔙 Назад"]
     ],
     resize_keyboard=True
@@ -49,33 +49,33 @@ CLEAR_MENU_MARKUP = ReplyKeyboardMarkup(
 
 CONFIRM_MARKUP = ReplyKeyboardMarkup(
     [
-        ["✅ Да", "❌ Нет"],
+        ["✅ Так", "❌ Ні"],
         ["🔙 Назад"]
     ],
     resize_keyboard=True
 )
 
 class CSVManager:
-    """Handles all CSV operations"""
+    """Клас для роботи з CSV файлом"""
     HEADERS = ["id", "timestamp", "user", "model", "vin", "work"]
     
     @staticmethod
     def ensure_file_exists():
-        """Create CSV file with headers if not exists"""
+        """Створює CSV файл з заголовками, якщо він не існує"""
         if not os.path.exists(CSV_FILE):
             with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
                 csv.writer(f).writerow(CSVManager.HEADERS)
     
     @staticmethod
     def get_recent_values(field: str, limit: int = RECENT_ITEMS_LIMIT) -> List[str]:
-        """Get unique recent values for a specific field"""
+        """Отримує останні унікальні значення для вказаного поля"""
         values = []
         seen: Set[str] = set()
         
         try:
             with open(CSV_FILE, newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                for row in reversed(list(reader)):  # Read from newest to oldest
+                for row in reversed(list(reader)):
                     if len(values) >= limit:
                         break
                     val = row.get(field, "").strip()
@@ -83,13 +83,12 @@ class CSVManager:
                         seen.add(val)
                         values.append(val)
         except FileNotFoundError:
-            logger.warning("CSV file not found while getting recent values")
-        
+            logger.warning("Файл CSV не знайдено")
         return values
     
     @staticmethod
     def save_record(user_data: Dict[str, str], username: str, work_text: str) -> int:
-        """Save new record and return its ID"""
+        """Зберігає новий запис і повертає його ID"""
         CSVManager.ensure_file_exists()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -105,17 +104,16 @@ class CSVManager:
                 user_data["vin"],
                 work_text
             ])
-        
         return next_id
     
     @staticmethod
     def export_records() -> Optional[str]:
-        """Return path to CSV file if exists"""
+        """Повертає шлях до CSV файлу, якщо він існує"""
         return CSV_FILE if os.path.exists(CSV_FILE) else None
     
     @staticmethod
     def clear_records(ids_to_remove: Optional[Set[str]] = None) -> bool:
-        """Clear all or specific records"""
+        """Очищає всі або конкретні записи"""
         try:
             with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.reader(f))
@@ -124,24 +122,19 @@ class CSVManager:
                 return False
             
             header, data = rows[0], rows[1:]
-            
-            if ids_to_remove:
-                new_data = [row for row in data if row[0] not in ids_to_remove]
-            else:
-                new_data = []
+            new_data = [row for row in data if not ids_to_remove or row[0] not in ids_to_remove]
             
             with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(header)
                 writer.writerows(new_data)
-            
             return True
         except Exception as e:
-            logger.error(f"Error clearing records: {e}")
+            logger.error(f"Помилка при очищенні: {e}")
             return False
 
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
-    """Create inline keyboard with items and manual option"""
+    """Створює інлайн-клавіатуру з варіантами"""
     buttons = [
         [InlineKeyboardButton(item, callback_data=f"{prefix}:{item}")]
         for item in items
@@ -150,12 +143,12 @@ def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 def is_admin(update: Update) -> bool:
-    """Check if user is admin"""
+    """Перевіряє, чи є користувач адміністратором"""
     username = f"@{update.effective_user.username}"
     return username in ADMIN_USERNAMES
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start conversation and ask for model"""
+    """Початок взаємодії з ботом"""
     if is_admin(update):
         await show_admin_menu(update, context)
         return ConversationHandler.END
@@ -168,20 +161,127 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MODEL
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show admin menu"""
+    """Показує меню адміністратора"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     await update.message.reply_text(
-        "Админ-меню:",
+        "Меню адміністратора:",
         reply_markup=ADMIN_MENU_MARKUP
     )
 
+async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє вибір моделі"""
+    query = update.callback_query
+    await query.answer()
+    
+    selected = query.data.split(":")[1]
+    if selected == "manual":
+        await query.edit_message_text("Введіть модель авто:")
+        return MODEL
+    
+    context.user_data["model"] = selected
+    vins = CSVManager.get_recent_values("vin")
+    await query.edit_message_text(
+        "Оберіть VIN або введіть вручну:",
+        reply_markup=create_keyboard(vins, "vin")
+    )
+    return VIN
+
+async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє ручний ввід моделі"""
+    context.user_data["model"] = update.message.text.strip()
+    vins = CSVManager.get_recent_values("vin")
+    await update.message.reply_text(
+        "Оберіть VIN або введіть вручну:",
+        reply_markup=create_keyboard(vins, "vin")
+    )
+    return VIN
+
+async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє вибір VIN"""
+    query = update.callback_query
+    await query.answer()
+    
+    selected = query.data.split(":")[1]
+    if selected == "manual":
+        await query.edit_message_text("Введіть останні 6 символів VIN:")
+        return VIN
+    
+    context.user_data["vin"] = selected
+    await query.edit_message_text(f"VIN: {selected}")
+    return await show_work_options(update, context)
+
+async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє ручний ввід VIN"""
+    vin_input = update.message.text.strip()
+    if len(vin_input) != 6 or not vin_input.isalnum():
+        await update.message.reply_text("❗ Введіть рівно 6 символів VIN.")
+        return VIN
+    context.user_data["vin"] = vin_input.upper()
+    return await show_work_options(update, context)
+
+async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показує варіанти робіт"""
+    works = CSVManager.get_recent_values("work", 6)
+    keyboard = create_keyboard(works, "work")
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "Що було зроблено?",
+            reply_markup=keyboard
+        )
+    else:
+        await update.message.reply_text(
+            "Що було зроблено?",
+            reply_markup=keyboard
+        )
+    return WORK
+
+async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє вибір робіт"""
+    query = update.callback_query
+    await query.answer()
+    
+    work_text = query.data.split(":")[1]
+    if work_text == "manual":
+        await query.edit_message_text("Введіть, що було зроблено:")
+        return WORK
+    
+    await save_and_confirm(update, context, work_text)
+    return ConversationHandler.END
+
+async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє ручний ввід робіт"""
+    work_text = update.message.text.strip()
+    await save_and_confirm(update, context, work_text)
+    return ConversationHandler.END
+
+async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, work_text: str) -> None:
+    """Зберігає запис і підтверджує"""
+    username = update.effective_user.full_name
+    record_id = CSVManager.save_record(context.user_data, username, work_text)
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Додати ще", callback_data="restart")]
+    ])
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            f"✅ Записано (ID: {record_id}): {work_text}",
+            reply_markup=keyboard
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ Записано (ID: {record_id}). Дякуємо!",
+            reply_markup=keyboard
+        )
+
 async def admin_add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start adding record from admin menu"""
+    """Починає додавання запису з меню адміна"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     models = CSVManager.get_recent_values("model")
@@ -192,47 +292,47 @@ async def admin_add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return MODEL
 
 async def admin_clear_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show clear options menu"""
+    """Показує опції очищення"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     await update.message.reply_text(
-        "Выберите тип очистки:",
+        "Оберіть тип очищення:",
         reply_markup=CLEAR_MENU_MARKUP
     )
 
 async def ask_clear_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ask confirmation for full clear"""
+    """Запитує підтвердження для повного очищення"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     await update.message.reply_text(
-        "❗ Вы уверены, что хотите удалить ВСЕ записи?",
+        "❗ Ви впевнені, що хочете видалити ВСІ записи?",
         reply_markup=CONFIRM_MARKUP
     )
     context.user_data["clear_type"] = "full"
 
 async def ask_ids_to_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ask for IDs to clear"""
+    """Запитує ID для очищення"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     await update.message.reply_text(
-        "Введите ID записей для удаления:\n"
-        "Примеры:\n"
-        "• 1 (удалить одну запись)\n"
-        "• 1-5 (удалить диапазон)\n"
-        "• 1,3,5 (удалить несколько)\n"
-        "• 1-3,5,7-9 (комбинация)",
+        "Введіть ID записів для видалення:\n"
+        "Приклади:\n"
+        "• 1 (однин запис)\n"
+        "• 1-5 (діапазон)\n"
+        "• 1,3,5 (декілька)\n"
+        "• 1-3,5,7-9 (комбінація)",
         reply_markup=ReplyKeyboardRemove()
     )
     context.user_data["clear_type"] = "partial"
 
 def parse_complex_ids(id_str: str) -> Set[str]:
-    """Parse complex ID patterns like '1-3,5,7-9'"""
+    """Розбирає складні шаблони ID"""
     ids = set()
     parts = id_str.split(",")
     
@@ -247,26 +347,26 @@ def parse_complex_ids(id_str: str) -> Set[str]:
     return ids
 
 async def execute_clearing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Execute clearing based on user choice"""
+    """Виконує очищення"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     clear_type = context.user_data.get("clear_type")
     
     if clear_type == "full":
-        if update.message.text == "✅ Да":
+        if update.message.text == "✅ Так":
             success = CSVManager.clear_records()
-            msg = "🗑 Все записи удалены!" if success else "❌ Ошибка при удалении"
+            msg = "🗑 Всі записи видалено!" if success else "❌ Помилка при видаленні"
         else:
-            msg = "❌ Удаление отменено"
+            msg = "❌ Видалення скасовано"
     elif clear_type == "partial":
         try:
             ids_to_remove = parse_complex_ids(update.message.text)
             success = CSVManager.clear_records(ids_to_remove)
-            msg = f"🗑 Удалены записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Ошибка при удалении"
+            msg = f"🗑 Видалено записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Помилка при видаленні"
         except ValueError:
-            msg = "❗ Неверный формат ID. Попробуйте еще раз."
+            msg = "❗ Невірний формат ID. Спробуйте ще раз."
             await update.message.reply_text(msg)
             return
     
@@ -276,36 +376,10 @@ async def execute_clearing(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     context.user_data.pop("clear_type", None)
 
-async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle admin menu commands"""
-    text = update.message.text
-    
-    if text == "➕ Добавить запись":
-        await admin_add_record(update, context)
-    elif text == "🗑 Очистить записи":
-        await admin_clear_options(update, context)
-    elif text == "📤 Экспорт":
-        await export_csv(update, context)
-    elif text == "🔙 Главное меню":
-        await update.message.reply_text(
-            "Главное меню",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    elif text == "❌ Очистить ВСЁ":
-        await ask_clear_confirmation(update, context)
-    elif text == "🔢 Очистить по ID":
-        await ask_ids_to_clear(update, context)
-    elif text == "🔙 Назад":
-        await show_admin_menu(update, context)
-    elif text in ["✅ Да", "❌ Нет"]:
-        await execute_clearing(update, context)
-    elif "clear_type" in context.user_data:
-        await execute_clearing(update, context)
-
 async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Export CSV file (admin only)"""
+    """Експортує CSV файл"""
     if not is_admin(update):
-        await update.message.reply_text("⛔ У вас нет прав администратора")
+        await update.message.reply_text("⛔ У вас немає прав адміністратора")
         return
     
     if csv_path := CSVManager.export_records():
@@ -314,41 +388,68 @@ async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             filename="records.csv"
         )
     else:
-        await update.message.reply_text("❌ Файл данных не найден")
+        await update.message.reply_text("❌ Файл даних не знайдено")
 
-# ... (остальные функции обработчиков остаются без изменений)
+async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обробляє команди адміністратора"""
+    text = update.message.text
+    
+    if text == "➕ Додати запис":
+        await admin_add_record(update, context)
+    elif text == "🗑 Очистити записи":
+        await admin_clear_options(update, context)
+    elif text == "📤 Експорт":
+        await export_csv(update, context)
+    elif text == "🔙 Головне меню":
+        await update.message.reply_text(
+            "Головне меню",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    elif text == "❌ Очистити ВСЕ":
+        await ask_clear_confirmation(update, context)
+    elif text == "🔢 Очистити за ID":
+        await ask_ids_to_clear(update, context)
+    elif text == "🔙 Назад":
+        await show_admin_menu(update, context)
+    elif text in ["✅ Так", "❌ Ні"]:
+        await execute_clearing(update, context)
+    elif "clear_type" in context.user_data:
+        await execute_clearing(update, context)
+
+async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Перезапускає діалог"""
+    query = update.callback_query
+    await query.answer()
+    return await start(update, context)
 
 def main() -> None:
-    """Start the bot"""
+    """Запускає бота"""
     if not (token := os.getenv("BOT_TOKEN")):
-        logger.error("BOT_TOKEN environment variable not set!")
+        logger.error("Не встановлено змінну BOT_TOKEN!")
         return
     
     CSVManager.ensure_file_exists()
     
     app = ApplicationBuilder().token(token).build()
     
-    # Conversation handler
+    # Обробник діалогу
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.Regex("^➕ Добавить запись$"), admin_add_record)
+            MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record)
         ],
         states={
             MODEL: [
-                CallbackQueryHandler(handle_model, pattern="^model:"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, 
-                    lambda u, c: handle_manual_input(u, c, "model")),
+                CallbackQueryHandler(model_selected, pattern="^model:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, model_manual),
             ],
             VIN: [
-                CallbackQueryHandler(handle_vin, pattern="^vin:"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, 
-                    lambda u, c: handle_manual_input(u, c, "vin")),
+                CallbackQueryHandler(vin_selected, pattern="^vin:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, vin_manual),
             ],
             WORK: [
-                CallbackQueryHandler(handle_work, pattern="^work:"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, 
-                    lambda u, c: handle_manual_input(u, c, "work")),
+                CallbackQueryHandler(work_selected, pattern="^work:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, work_manual),
             ]
         },
         fallbacks=[CommandHandler("cancel", 
@@ -361,7 +462,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_commands))
     app.add_handler(CallbackQueryHandler(restart_conversation, pattern="^restart$"))
     
-    logger.info("Starting bot...")
+    logger.info("Запуск бота...")
     app.run_polling()
 
 if __name__ == '__main__':
