@@ -9,7 +9,7 @@ import datetime
 
 MODEL, VIN, WORK = range(3)
 CSV_FILE = "records.csv"
-ADMIN_USERNAMES = ["@NerMers"]  # список Telegram username админов
+ADMIN_USERNAMES = os.getenv("ADMIN_USERNAMES", "").split(",")  # список Telegram username админов
 
 # Убедимся, что CSV существует с заголовками
 if not os.path.exists(CSV_FILE):
@@ -141,6 +141,32 @@ async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_document(document=open(CSV_FILE, "rb"), filename="records.csv")
 
+async def clear_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    if f"@{username}" not in ADMIN_USERNAMES:
+        await update.message.reply_text("⛔ У вас немає прав для очищення бази.")
+        return
+
+    keyboard = [[InlineKeyboardButton("Так, очистити", callback_data="confirm_clear")]]
+    await update.message.reply_text(
+        "❗ Ви впевнені, що хочете видалити ВСІ записи?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def confirm_clear_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.effective_user.username
+    if f"@{username}" not in ADMIN_USERNAMES:
+        await update.callback_query.answer("⛔ Немає доступу.", show_alert=True)
+        return
+    await update.callback_query.answer()
+    with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "user", "model", "vin", "work"])
+    await update.callback_query.edit_message_text("🗑 Усі записи видалено.")
+    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.callback_query.message.message_id, delay=5)
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано.")
     return ConversationHandler.END
@@ -175,4 +201,6 @@ if __name__ == '__main__':
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(restart, pattern="^restart$"))
     app.add_handler(CommandHandler("export", export_csv))
+    app.add_handler(CommandHandler("clear", clear_csv))
+    app.add_handler(CallbackQueryHandler(confirm_clear_csv, pattern="^confirm_clear$"))
     app.run_polling()
