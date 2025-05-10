@@ -323,8 +323,12 @@ async def handle_partial_clear_input(update: Update, context: ContextTypes.DEFAU
         return
     context.user_data.pop("awaiting_clear_input", None)
     confirm_text = f"🔸 Ви вибрали для видалення записи: {', '.join(sorted(ids))}. Підтвердити?"
-    keyboard = [[InlineKeyboardButton("✅ Так, видалити ці записи", callback_data=f"confirm_partial_clear:{','.join(sorted(ids))}")]]
+    keyboard = [[InlineKeyboardButton(
+        "✅ Так, видалити ці записи",
+        callback_data=f"confirm_partial_clear:{','.join(sorted(ids))}"
+    )]]
     await update.message.reply_text(confirm_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
