@@ -176,8 +176,8 @@ async def save_record(user, context, work_text):
         writer.writerow(row)
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    if update.callback_query:
+        await update.callback_query.answer()
     return await start(update, context)
 
 async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
