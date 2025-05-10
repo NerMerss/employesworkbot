@@ -178,6 +178,8 @@ async def save_record(user, context, work_text):
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
+        return await start(update.callback_query, context)
+    elif update.message:
         return await start(update, context)
     elif update.message:
         return await start(update, context)
