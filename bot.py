@@ -261,24 +261,24 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, work_text: str) -> None:
-    """Зберігає запис і підтверджує"""
+    """Зберігає запис і показує кнопку 'Додати ще'"""
     username = update.effective_user.full_name
     record_id = CSVManager.save_record(context.user_data, username, work_text)
     
-    # Створюємо клавіатуру з кнопкою
+    # Створюємо кнопку
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати ще", callback_data="restart")]
     ])
     
-    # Відправляємо повідомлення з кнопкою
+    # Відправляємо повідомлення
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            f"✅ Записано (ID: {record_id}): {work_text}",
+            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
             reply_markup=keyboard
         )
     else:
         await update.message.reply_text(
-            f"✅ Записано (ID: {record_id}). Дякуємо!",
+            f"✅ Запис збережено (ID: {record_id})\nЩо було зроблено: {work_text}",
             reply_markup=keyboard
         )
 
@@ -421,38 +421,47 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
         await execute_clearing(update, context)
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Перезапускає діалог"""
+    """Обробляє натискання кнопки 'Додати ще' і починає нову бесіду"""
     query = update.callback_query
     await query.answer()
     
     # Очищаємо попередні дані
     context.user_data.clear()
     
-    # Видаляємо попереднє повідомлення з кнопкою
+    # Видаляємо попереднє повідомлення
     try:
-        await query.delete_message()
+        await context.bot.delete_message(
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id
+        )
     except Exception as e:
-        logger.error(f"Помилка при видаленні повідомлення: {e}")
+        logger.error(f"Не вдалося видалити повідомлення: {e}")
     
     # Починаємо нову бесіду
     return await start(update, context)
-
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Скасовує поточну бесіду"""
+    await update.message.reply_text(
+        "❌ Дію скасовано",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
 def main() -> None:
-    """Запускає бота"""
     if not (token := os.getenv("BOT_TOKEN")):
-        logger.error("Не встановлено змінну BOT_TOKEN!")
+        logger.error("BOT_TOKEN не знайдено!")
         return
     
     CSVManager.ensure_file_exists()
     
     app = ApplicationBuilder().token(token).build()
     
-    # Обробник діалогу
+    # Основний обробник бесіди
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record),
-            CallbackQueryHandler(restart_conversation, pattern="^restart$")  # Додано тут
+            CallbackQueryHandler(restart_conversation, pattern="^restart$")
         ],
         states={
             MODEL: [
@@ -468,18 +477,13 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, work_manual),
             ]
         },
-        fallbacks=[CommandHandler("cancel", 
-            lambda u, c: u.message.reply_text("❌ Скасовано.") or ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
     
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("admin", show_admin_menu))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_commands))
-    # Видалили окремий обробник для restart, так як він тепер у ConversationHandler
     
-    logger.info("Запуск бота...")
+    logger.info("Бот запущений...")
     app.run_polling()
-
-if __name__ == '__main__':
-    main()
