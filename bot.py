@@ -514,20 +514,31 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     
     text = update.message.text
     
-    if text == "➕ Додати запис":
-        await add_record(update, context)
-    elif text == "🗑 Видалити записи" and user_level == "owner":
+    # Спочатку перевіряємо команди видалення
+    if text == "🗑 Видалити записи" and user_level == "owner":
         await show_delete_menu(update, context)
-    elif text == "📤 Експорт даних" and user_level == "owner":
-        await export_data(update, context)
+        return
     elif text == "❌ Видалити ВСЕ" and user_level == "owner":
         await ask_delete_confirmation(update, context)
+        return
     elif text == "🔢 Видалити за ID" and user_level == "owner":
         await ask_ids_to_delete(update, context)
-    elif text in ["✅ Так", "❌ Ні"] and user_level == "owner":
+        return
+    elif text == "🔙 Назад" and user_level == "owner":
+        await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
+        return
+    elif text in ["✅ Так", "❌ Ні"] and user_level == "owner" and "delete_type" in context.user_data:
         await execute_deletion(update, context)
+        return
     elif "delete_type" in context.user_data and user_level == "owner":
         await execute_deletion(update, context)
+        return
+    
+    # Потім перевіряємо інші команди
+    if text == "➕ Додати запис":
+        await add_record(update, context)
+    elif text == "📤 Експорт даних" and user_level == "owner":
+        await export_data(update, context)
     else:
         # Перевіряємо, чи це частина бесіди
         current_state = await context.application.persistence.get_conversation(update.effective_chat.id)
