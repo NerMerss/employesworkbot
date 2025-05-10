@@ -3,8 +3,11 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
+import os
+
 import sqlite3
 import datetime
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
 MODEL, VIN, WORK = range(3)
@@ -133,7 +136,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 if __name__ == '__main__':
-    app = ApplicationBuilder().token("BOT_TOKEN").build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 
     conv_handler = ConversationHandler(
         entry_points=[
