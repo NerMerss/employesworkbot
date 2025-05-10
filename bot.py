@@ -156,6 +156,7 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_record(query.from_user.full_name, context, selected)
     keyboard = [[InlineKeyboardButton("➕ Додати ще", callback_data="restart")]]
     await query.edit_message_text(f"✅ Записано: {selected}", reply_markup=InlineKeyboardMarkup(keyboard))
+    await send_main_menu(update, context)
     return ConversationHandler.END
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,6 +178,10 @@ async def save_record(user, context, work_text):
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
+        await update.callback_query.answer()
+        return await start(update, context)
+    elif update.message:
+        return await start(update, context)
         await update.callback_query.answer()
     return await start(update, context)
 
