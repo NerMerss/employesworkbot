@@ -257,7 +257,7 @@ if __name__ == '__main__':
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
+            CommandHandler("start", send_main_menu),
             CallbackQueryHandler(model_selected, pattern="^model:")
         ],
         states={
