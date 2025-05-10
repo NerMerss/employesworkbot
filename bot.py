@@ -20,6 +20,10 @@ MODEL, VIN, WORK, EXECUTOR = range(4)
 CSV_FILE = "records.csv"
 RECENT_ITEMS_LIMIT = 5
 
+# Списки моделей
+TESLA_MODELS = ["Model 3", "Model Y", "Model S", "Model X", "Cybertruck", "Roadster", "Інше (не Tesla)"]
+OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007", "Інше"]
+
 def parse_user_list(env_var: str) -> dict:
     """Парсить список користувачів у форматі { '@username': 'Ім'я Прізвище' }"""
     users = {}
@@ -144,7 +148,7 @@ class CSVManager:
 
 def get_user_level(username: str) -> Optional[str]:
     """Повертає рівень доступу користувача"""
-    username = username.lower().strip()  # Додано lower() для нечутливості до регістру
+    username = username.lower().strip()
     if not username.startswith("@"):
         username = f"@{username}"
         
@@ -159,6 +163,10 @@ def get_user_level(username: str) -> Optional[str]:
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(item, callback_data=f"{prefix}:{item}")] for item in items]
     buttons.append([InlineKeyboardButton("Ввести вручну", callback_data=f"{prefix}:manual")])
+    return InlineKeyboardMarkup(buttons)
+
+def create_model_keyboard(models: List[str]) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(model, callback_data=f"model:{model}")] for model in models]
     return InlineKeyboardMarkup(buttons)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -194,10 +202,9 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if user_level == "worker":
         context.user_data["executor"] = username
         context.user_data["executor_name"] = user_name
-        models = CSVManager.get_recent_values("model")
         await update.message.reply_text(
-            "Виберіть модель авто або введіть вручну:",
-            reply_markup=create_keyboard(models, "model")
+            "Виберіть модель авто:",
+            reply_markup=create_model_keyboard(TESLA_MODELS)
         )
         return MODEL
     
@@ -239,10 +246,9 @@ async def executor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["executor"] = user_id
     context.user_data["executor_name"] = name
     
-    models = CSVManager.get_recent_values("model")
     await query.edit_message_text(
-        "Виберіть модель авто або введіть вручну:",
-        reply_markup=create_keyboard(models, "model")
+        "Виберіть модель авто:",
+        reply_markup=create_model_keyboard(TESLA_MODELS)
     )
     return MODEL
 
@@ -252,11 +258,15 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     selected = query.data.split(":")[1]
-    if selected == "manual":
-        await query.edit_message_text("Введіть модель авто:")
+    context.user_data["model"] = selected
+    
+    if selected == "Інше (не Tesla)":
+        await query.edit_message_text(
+            "Виберіть модель авто:",
+            reply_markup=create_model_keyboard(OTHER_MODELS)
+        )
         return MODEL
     
-    context.user_data["model"] = selected
     vins = CSVManager.get_recent_values("vin")
     await query.edit_message_text(
         "Оберіть VIN або введіть вручну:",
@@ -269,7 +279,12 @@ async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if update.message.text in ["🗑 Видалити записи", "📤 Експорт даних"]:
         return await handle_text_messages(update, context)
     
-    context.user_data["model"] = update.message.text.strip()
+    model_input = update.message.text.strip()
+    if model_input in TESLA_MODELS + OTHER_MODELS:
+        context.user_data["model"] = model_input
+    else:
+        context.user_data["model"] = f"Інше: {model_input}"
+    
     vins = CSVManager.get_recent_values("vin")
     await update.message.reply_text(
         "Оберіть VIN або введіть вручну:",
