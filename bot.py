@@ -301,10 +301,10 @@ async def confirm_clear_prompt(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def prompt_partial_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "✏️ Введіть номери записів, які потрібно видалити. Наприклад: 
-`1`, `2-4`, `1,3`, `1-2,5-6`",
-        parse_mode="Markdown"
-    )
+    "✏️ Введіть номери записів, які потрібно видалити. Наприклад: `1`, `2-4`, `1,3`, `1-2,5-6`",
+    parse_mode="Markdown"
+)
+
 async def handle_partial_clear_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("awaiting_clear_input"):
         return
