@@ -265,10 +265,12 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, w
     username = update.effective_user.full_name
     record_id = CSVManager.save_record(context.user_data, username, work_text)
     
+    # Створюємо клавіатуру з кнопкою
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати ще", callback_data="restart")]
     ])
     
+    # Відправляємо повідомлення з кнопкою
     if update.callback_query:
         await update.callback_query.edit_message_text(
             f"✅ Записано (ID: {record_id}): {work_text}",
@@ -422,6 +424,17 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     """Перезапускає діалог"""
     query = update.callback_query
     await query.answer()
+    
+    # Очищаємо попередні дані
+    context.user_data.clear()
+    
+    # Видаляємо попереднє повідомлення з кнопкою
+    try:
+        await query.delete_message()
+    except Exception as e:
+        logger.error(f"Помилка при видаленні повідомлення: {e}")
+    
+    # Починаємо нову бесіду
     return await start(update, context)
 
 def main() -> None:
@@ -438,7 +451,8 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record)
+            MessageHandler(filters.Regex("^➕ Додати запис$"), admin_add_record),
+            CallbackQueryHandler(restart_conversation, pattern="^restart$")  # Додано тут
         ],
         states={
             MODEL: [
@@ -462,7 +476,7 @@ def main() -> None:
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("admin", show_admin_menu))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_commands))
-    app.add_handler(CallbackQueryHandler(restart_conversation, pattern="^restart$"))
+    # Видалили окремий обробник для restart, так як він тепер у ConversationHandler
     
     logger.info("Запуск бота...")
     app.run_polling()
