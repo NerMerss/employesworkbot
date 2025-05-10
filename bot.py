@@ -47,7 +47,11 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📋 Оберіть дію:",
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
         )
-        return await restart(update, context)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            "📋 Оберіть дію:",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+        )
     elif update.callback_query:
         await update.callback_query.message.reply_text(
             "📋 Оберіть дію:",
@@ -155,6 +159,7 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("➕ Додати ще", callback_data="restart")]]
     await query.edit_message_text(f"✅ Записано: {selected}", reply_markup=InlineKeyboardMarkup(keyboard))
     await send_main_menu(update, context)
+    return await restart(update, context)
     return ConversationHandler.END
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,7 +183,9 @@ async def save_record(user, context, work_text):
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
-        return await start(update.callback_query, context)
+        message = update.callback_query.message
+        fake_update = Update(update.update_id, message=message)
+        return await start(fake_update, context)
     elif update.message:
         return await start(update, context)
     elif update.message:
