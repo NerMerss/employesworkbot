@@ -96,10 +96,18 @@ class GoogleSheetsManager:
         """Підключається до Google Sheets"""
         try:
             self.client = gspread.authorize(self.credentials)
-            self.sheet = self.client.open_by_key(self.spreadsheet_id).worksheet(self.sheet_name)
+            spreadsheet = self.client.open_by_key(self.spreadsheet_id)
             
+            # Перевіряємо наявність листа
+            try:
+                self.sheet = spreadsheet.worksheet(self.sheet_name)
+            except gspread.exceptions.WorksheetNotFound:
+                # Якщо лист не існує - створюємо
+                self.sheet = spreadsheet.add_worksheet(title=self.sheet_name, rows=100, cols=20)
+                self.sheet.append_row(self.HEADERS)
+                
             # Перевіряємо наявність заголовків
-            if not self.sheet.get_values('A1:J1'):
+            if not self.sheet.get('A1:J1'):
                 self.sheet.append_row(self.HEADERS)
         except Exception as e:
             logger.error(f"Помилка підключення до Google Sheets: {e}")
@@ -130,10 +138,8 @@ class GoogleSheetsManager:
         """Зберігає запис у таблицю"""
         try:
             # Отримуємо останній ID
-            last_id = 0
             ids = self.sheet.col_values(1)[1:]  # Пропускаємо заголовок
-            if ids:
-                last_id = int(ids[-1]) if ids[-1].isdigit() else 0
+            last_id = int(ids[-1]) if ids else 0
             
             new_id = last_id + 1
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -244,6 +250,7 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return MODEL
     
+    # Для owner та manager показуємо меню вибору виконавця
     if user_level == "owner":
         executors = {**OWNERS, **MANAGERS, **WORKERS}
     else:  # manager
