@@ -185,7 +185,9 @@ def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 def create_model_keyboard(models: List[str]) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(model, callback_data=f"model:{model}")] for model in models]
+    buttons = []
+    for model in models:
+        buttons.append([InlineKeyboardButton(model, callback_data=f"model:{model}")])
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
 
@@ -298,29 +300,36 @@ async def executor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє вибір моделі"""
+    logger.info(f"Отримано callback_data: {query.data}")
     query = update.callback_query
     await query.answer()
     
     if query.data == "back":
         return await back_to_menu(update, context)
     
-    selected = query.data.split(":")[1]
-    context.user_data["model"] = selected
-    
-    if selected == "Інше (не Tesla)":
+    try:
+        _, selected = query.data.split(":", 1)
+        context.user_data["model"] = selected
+        
+        if selected == "Інше (не Tesla)":
+            await query.edit_message_text(
+                "Виберіть модель авто:",
+                reply_markup=create_model_keyboard(OTHER_MODELS)
+            )
+            return MODEL
+        
+        sheets_manager = GoogleSheetsManager()
+        vins = sheets_manager.get_recent_values("vin")
         await query.edit_message_text(
-            "Виберіть модель авто:",
-            reply_markup=create_model_keyboard(OTHER_MODELS)
+            "Оберіть VIN або введіть вручну:",
+            reply_markup=create_keyboard(vins, "vin")
         )
-        return MODEL
-    
-    sheets_manager = GoogleSheetsManager()
-    vins = sheets_manager.get_recent_values("vin")
-    await query.edit_message_text(
-        "Оберіть VIN або введіть вручну:",
-        reply_markup=create_keyboard(vins, "vin")
-    )
-    return VIN
+        return VIN
+        
+    except Exception as e:
+        logger.error(f"Помилка при обробці вибору моделі: {e}")
+        await query.edit_message_text("❌ Сталася помилка. Спробуйте ще раз.")
+        return await back_to_menu(update, context)
 
 async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід моделі"""
