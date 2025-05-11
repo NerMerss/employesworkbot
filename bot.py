@@ -17,7 +17,7 @@ import datetime
 
 # Константи
 MODEL, VIN, WORK, EXECUTOR = range(4)
-CSV_FILE = "records.csv"
+CSV_FILE = "/data/records.csv"
 RECENT_ITEMS_LIMIT = 5
 
 # Списки моделей
