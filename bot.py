@@ -412,7 +412,6 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, w
     record_id = CSVManager.save_record(context.user_data, username, user_name, user_level)
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Додати ще", callback_data="add_more")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back")]
     ])
     
@@ -434,38 +433,6 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, w
             f"Робота: {work_text}",
             reply_markup=keyboard
         )
-
-async def handle_add_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробляє натискання кнопки 'Додати ще'"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Очищаємо попередні дані, крім інформації про користувача
-    user_level = context.user_data.get("user_level")
-    user_name = context.user_data.get("user_name")
-    context.user_data.clear()
-    
-    if user_level and user_name:
-        context.user_data["user_level"] = user_level
-        context.user_data["user_name"] = user_name
-    
-    try:
-        await query.delete_message()
-    except Exception as e:
-        logger.error(f"Не вдалося видалити повідомлення: {e}")
-    
-    # Для працівників одразу встановлюємо себе як виконавця
-    if user_level == "worker":
-        context.user_data["executor"] = f"@{update.effective_user.username}"
-        context.user_data["executor_name"] = user_name
-        await update.effective_message.reply_text(
-            "Виберіть модель авто:",
-            reply_markup=create_model_keyboard(TESLA_MODELS)
-        )
-        return MODEL
-    
-    # Для інших рівнів починаємо з вибору виконавця
-    return await add_record(update, context)
 
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показує меню видалення"""
@@ -629,7 +596,6 @@ def main() -> None:
         entry_points=[
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^➕ Додати запис$"), add_record),
-            CallbackQueryHandler(handle_add_more, pattern="^add_more$"),
             CallbackQueryHandler(back_to_menu, pattern="^back$")
         ],
         states={
