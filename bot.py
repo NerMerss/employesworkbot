@@ -24,6 +24,13 @@ RECENT_ITEMS_LIMIT = 5
 TESLA_MODELS = ["Model 3", "Model Y", "Model S", "Model X", "Cybertruck", "Roadster", "Інше (не Tesla)"]
 OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007", "Інше"]
 
+# Список спеціальних команд
+SPECIAL_COMMANDS = [
+    "➕ Додати запис", "🗑 Видалити записи", "📤 Експорт даних",
+    "❌ Видалити ВСЕ", "🔢 Видалити за ID", "🔙 Назад",
+    "✅ Так", "❌ Ні"
+]
+
 def parse_user_list(env_var: str) -> dict:
     """Парсить список користувачів у форматі { '@username': 'Ім'я Прізвище' }"""
     users = {}
@@ -176,7 +183,10 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     if query:
         await query.answer()
-        await query.delete_message()
+        try:
+            await query.delete_message()
+        except Exception as e:
+            logger.error(f"Не вдалося видалити повідомлення: {e}")
     
     username = f"@{update.effective_user.username}"
     user_level = get_user_level(username)
@@ -301,14 +311,15 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід моделі"""
-    if update.message.text == "🔙 Назад":
-        return await back_to_menu(update, context)
+    text = update.message.text.strip()
     
-    model_input = update.message.text.strip()
-    if model_input in TESLA_MODELS + OTHER_MODELS:
-        context.user_data["model"] = model_input
+    if text in SPECIAL_COMMANDS:
+        return await handle_text_messages(update, context)
+    
+    if text in TESLA_MODELS + OTHER_MODELS:
+        context.user_data["model"] = text
     else:
-        context.user_data["model"] = f"Інше: {model_input}"
+        context.user_data["model"] = f"Інше: {text}"
     
     vins = CSVManager.get_recent_values("vin")
     await update.message.reply_text(
@@ -336,14 +347,16 @@ async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід VIN"""
-    if update.message.text == "🔙 Назад":
-        return await back_to_menu(update, context)
+    text = update.message.text.strip()
     
-    vin_input = update.message.text.strip()
-    if len(vin_input) != 6 or not vin_input.isalnum():
+    if text in SPECIAL_COMMANDS:
+        return await handle_text_messages(update, context)
+    
+    if len(text) != 6 or not text.isalnum():
         await update.message.reply_text("❗ Введіть рівно 6 символів VIN.")
         return VIN
-    context.user_data["vin"] = vin_input.upper()
+    
+    context.user_data["vin"] = text.upper()
     return await show_work_options(update, context)
 
 async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -381,11 +394,12 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід робіт"""
-    if update.message.text == "🔙 Назад":
-        return await back_to_menu(update, context)
+    text = update.message.text.strip()
     
-    work_text = update.message.text.strip()
-    await save_and_confirm(update, context, work_text)
+    if text in SPECIAL_COMMANDS:
+        return await handle_text_messages(update, context)
+    
+    await save_and_confirm(update, context, text)
     return ConversationHandler.END
 
 async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, work_text: str) -> None:
@@ -482,7 +496,9 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("⛔ У вас немає прав для цієї дії")
         return
     
-    if update.message.text == "🔙 Назад":
+    text = update.message.text.strip()
+    
+    if text == "🔙 Назад":
         await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
         context.user_data.pop("delete_type", None)
         return
@@ -490,7 +506,7 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     delete_type = context.user_data.get("delete_type")
     
     if delete_type == "all":
-        if update.message.text == "✅ Так":
+        if text == "✅ Так":
             success = CSVManager.delete_records()
             msg = "🗑 Всі записи видалено!" if success else "❌ Помилка при видаленні"
             await update.message.reply_text(msg, reply_markup=OWNER_MENU)
@@ -498,7 +514,7 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text("❌ Видалення скасовано", reply_markup=OWNER_MENU)
     elif delete_type == "selected":
         try:
-            ids_to_remove = parse_ids(update.message.text)
+            ids_to_remove = parse_ids(text)
             success = CSVManager.delete_records(ids_to_remove)
             msg = f"🗑 Видалено записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Помилка при видаленні"
             await update.message.reply_text(msg, reply_markup=OWNER_MENU)
@@ -548,45 +564,35 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⛔ У вас немає доступу до цього бота")
         return
     
-    text = update.message.text
+    text = update.message.text.strip()
     
-    # Спочатку перевіряємо команди видалення
-    if text == "🗑 Видалити записи" and user_level == "owner":
-        await show_delete_menu(update, context)
-        return
-    elif text == "❌ Видалити ВСЕ" and user_level == "owner":
-        await ask_delete_confirmation(update, context)
-        return
-    elif text == "🔢 Видалити за ID" and user_level == "owner":
-        await ask_ids_to_delete(update, context)
-        return
-    elif text == "🔙 Назад" and user_level == "owner":
-        await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
-        return
-    elif text in ["✅ Так", "❌ Ні"] and user_level == "owner" and "delete_type" in context.user_data:
-        await execute_deletion(update, context)
-        return
-    elif "delete_type" in context.user_data and user_level == "owner":
-        await execute_deletion(update, context)
+    if text in SPECIAL_COMMANDS:
+        if text == "➕ Додати запис":
+            await add_record(update, context)
+        elif text == "🗑 Видалити записи" and user_level == "owner":
+            await show_delete_menu(update, context)
+        elif text == "📤 Експорт даних" and user_level == "owner":
+            await export_data(update, context)
+        elif text == "❌ Видалити ВСЕ" and user_level == "owner":
+            await ask_delete_confirmation(update, context)
+        elif text == "🔢 Видалити за ID" and user_level == "owner":
+            await ask_ids_to_delete(update, context)
+        elif text == "🔙 Назад":
+            await back_to_menu(update, context)
+        elif text in ["✅ Так", "❌ Ні"] and user_level == "owner" and "delete_type" in context.user_data:
+            await execute_deletion(update, context)
         return
     
-    # Потім перевіряємо інші команди
-    if text == "➕ Додати запис":
-        await add_record(update, context)
-    elif text == "📤 Експорт даних" and user_level == "owner":
-        await export_data(update, context)
+    current_state = await context.application.persistence.get_conversation(update.effective_chat.id)
+    if current_state:
+        if current_state.get('state') == MODEL:
+            await model_manual(update, context)
+        elif current_state.get('state') == VIN:
+            await vin_manual(update, context)
+        elif current_state.get('state') == WORK:
+            await work_manual(update, context)
     else:
-        # Перевіряємо, чи це частина бесіди
-        current_state = await context.application.persistence.get_conversation(update.effective_chat.id)
-        if current_state:
-            if current_state.get('state') == MODEL:
-                await model_manual(update, context)
-            elif current_state.get('state') == VIN:
-                await vin_manual(update, context)
-            elif current_state.get('state') == WORK:
-                await work_manual(update, context)
-        else:
-            await update.message.reply_text("Оберіть дію з меню")
+        await update.message.reply_text("Оберіть дію з меню")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Скасовує поточну бесіду"""
