@@ -466,11 +466,37 @@ async def ask_ids_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("⛔ У вас немає прав для цієї дії")
         return
     
-    await update.message.reply_text(
-        "Введіть ID записів для видалення (наприклад: 1, 2-5, 7):",
-        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-    )
-    context.user_data["delete_type"] = "selected"
+    # Спочатку показуємо список доступних ID
+    try:
+        with open(CSV_FILE, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            records = list(reader)
+            
+        if not records:
+            await update.message.reply_text("ℹ Немає записів для видалення", reply_markup=OWNER_MENU)
+            return
+            
+        # Формуємо список останніх 10 записів для прикладу
+        last_records = records[-10:]
+        message = "Доступні записи (останні 10):\n"
+        message += "\n".join(
+            f"ID: {record['id']}, Модель: {record['model']}, VIN: {record['vin']}"
+            for record in last_records
+        )
+        message += "\n\nВведіть ID для видалення (наприклад: 1, 2-5, 7):"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data["delete_type"] = "selected"
+        
+    except Exception as e:
+        logger.error(f"Помилка при читанні записів: {e}")
+        await update.message.reply_text(
+            "❌ Помилка при отриманні списку записів",
+            reply_markup=OWNER_MENU
+        )
 
 async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Виконує видалення записів"""
@@ -491,7 +517,6 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if delete_type == "all":
         if text == "✅ Так":
             try:
-                # Створюємо порожній файл з заголовками
                 with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow(CSVManager.HEADERS)
@@ -503,10 +528,14 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text("❌ Видалення скасовано", reply_markup=OWNER_MENU)
     
     elif delete_type == "selected":
+        if not text:
+            await update.message.reply_text("❗ Введіть ID для видалення", reply_markup=OWNER_MENU)
+            return
+            
         try:
             ids_to_remove = parse_ids(text)
             if not ids_to_remove:
-                await update.message.reply_text("❗ Не вказано ID для видалення", reply_markup=OWNER_MENU)
+                await update.message.reply_text("❗ Неправильний формат ID", reply_markup=OWNER_MENU)
                 return
             
             # Читаємо всі записи
@@ -521,6 +550,18 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             header = rows[0]
             data = rows[1:]
             
+            # Знаходимо існуючі ID
+            existing_ids = {row[0] for row in data}
+            # Фільтруємо тільки ті ID, які існують
+            ids_to_remove = [id_ for id_ in ids_to_remove if id_ in existing_ids]
+            
+            if not ids_to_remove:
+                await update.message.reply_text(
+                    "ℹ Вказані ID не знайдено в базі",
+                    reply_markup=OWNER_MENU
+                )
+                return
+            
             # Фільтруємо записи
             new_data = [row for row in data if row[0] not in ids_to_remove]
             
@@ -531,33 +572,34 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 writer.writerows(new_data)
             
             await update.message.reply_text(
-                f"🗑 Видалено записів: {len(data) - len(new_data)}",
+                f"🗑 Успішно видалено записів: {len(ids_to_remove)}\n"
+                f"ID: {', '.join(sorted(ids_to_remove))}",
                 reply_markup=OWNER_MENU
             )
         except Exception as e:
             logger.error(f"Помилка при видаленні: {e}")
             await update.message.reply_text(
-                "❌ Помилка при видаленні. Перевірте формат ID.",
+                "❌ Помилка при видаленні. Спробуйте ще раз.",
                 reply_markup=OWNER_MENU
             )
     
     context.user_data.pop("delete_type", None)
 
-def parse_ids(id_str: str) -> Set[str]:
-    """Розбирає рядок з ID на множину"""
-    ids = set()
+def parse_ids(id_str: str) -> List[str]:
+    """Розбирає рядок з ID на список"""
+    ids = []
     parts = [p.strip() for p in id_str.split(",") if p.strip()]
     
     for part in parts:
         if "-" in part:
             try:
                 start, end = map(int, part.split("-"))
-                ids.update(str(i) for i in range(start, end + 1))
+                ids.extend(str(i) for i in range(start, end + 1))
             except ValueError:
                 continue
         else:
             if part.isdigit():
-                ids.add(part)
+                ids.append(part)
     return ids
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
