@@ -490,20 +490,54 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     if delete_type == "all":
         if text == "✅ Так":
-            success = CSVManager.delete_records()
-            msg = "🗑 Всі записи видалено!" if success else "❌ Помилка при видаленні"
-            await update.message.reply_text(msg, reply_markup=OWNER_MENU)
+            try:
+                # Створюємо порожній файл з заголовками
+                with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(CSVManager.HEADERS)
+                await update.message.reply_text("🗑 Всі записи видалено!", reply_markup=OWNER_MENU)
+            except Exception as e:
+                logger.error(f"Помилка при видаленні всіх записів: {e}")
+                await update.message.reply_text("❌ Помилка при видаленні", reply_markup=OWNER_MENU)
         else:
             await update.message.reply_text("❌ Видалення скасовано", reply_markup=OWNER_MENU)
+    
     elif delete_type == "selected":
         try:
             ids_to_remove = parse_ids(text)
-            success = CSVManager.delete_records(ids_to_remove)
-            msg = f"🗑 Видалено записи: {', '.join(sorted(ids_to_remove))}" if success else "❌ Помилка при видаленні"
-            await update.message.reply_text(msg, reply_markup=OWNER_MENU)
-        except ValueError:
+            if not ids_to_remove:
+                await update.message.reply_text("❗ Не вказано ID для видалення", reply_markup=OWNER_MENU)
+                return
+            
+            # Читаємо всі записи
+            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            
+            if len(rows) <= 1:  # Тільки заголовки
+                await update.message.reply_text("ℹ Немає записів для видалення", reply_markup=OWNER_MENU)
+                return
+            
+            header = rows[0]
+            data = rows[1:]
+            
+            # Фільтруємо записи
+            new_data = [row for row in data if row[0] not in ids_to_remove]
+            
+            # Записуємо назад
+            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+                writer.writerows(new_data)
+            
             await update.message.reply_text(
-                "❗ Невірний формат ID. Спробуйте ще раз.",
+                f"🗑 Видалено записів: {len(data) - len(new_data)}",
+                reply_markup=OWNER_MENU
+            )
+        except Exception as e:
+            logger.error(f"Помилка при видаленні: {e}")
+            await update.message.reply_text(
+                "❌ Помилка при видаленні. Перевірте формат ID.",
                 reply_markup=OWNER_MENU
             )
     
@@ -516,10 +550,14 @@ def parse_ids(id_str: str) -> Set[str]:
     
     for part in parts:
         if "-" in part:
-            start, end = map(int, part.split("-"))
-            ids.update(str(i) for i in range(start, end + 1))
+            try:
+                start, end = map(int, part.split("-"))
+                ids.update(str(i) for i in range(start, end + 1))
+            except ValueError:
+                continue
         else:
-            ids.add(part)
+            if part.isdigit():
+                ids.add(part)
     return ids
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
