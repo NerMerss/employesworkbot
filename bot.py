@@ -497,6 +497,7 @@ async def ask_ids_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "❌ Помилка при отриманні списку записів",
             reply_markup=OWNER_MENU
         )
+
 async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Виконує видалення записів"""
     username = f"@{update.effective_user.username}"
@@ -570,91 +571,6 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text(
                 f"🗑 Успішно видалено записів: {len(deleted_ids)}\n"
                 f"ID: {', '.join(sorted(deleted_ids))}",
-                reply_markup=OWNER_MENU
-            )
-        except Exception as e:
-            logger.error(f"Помилка при видаленні: {e}")
-            await update.message.reply_text(
-                "❌ Помилка при видаленні. Спробуйте ще раз.",
-                reply_markup=OWNER_MENU
-            )
-    
-    context.user_data.pop("delete_type", None)
-    """Виконує видалення записів"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
-    
-    text = update.message.text.strip()
-    
-    if text == "🔙 Назад":
-        await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
-        context.user_data.pop("delete_type", None)
-        return
-    
-    delete_type = context.user_data.get("delete_type")
-    
-    if delete_type == "all":
-        if text == "✅ Так":
-            try:
-                with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(CSVManager.HEADERS)
-                await update.message.reply_text("🗑 Всі записи видалено!", reply_markup=OWNER_MENU)
-            except Exception as e:
-                logger.error(f"Помилка при видаленні всіх записів: {e}")
-                await update.message.reply_text("❌ Помилка при видаленні", reply_markup=OWNER_MENU)
-        else:
-            await update.message.reply_text("❌ Видалення скасовано", reply_markup=OWNER_MENU)
-    
-    elif delete_type == "selected":
-        if not text:
-            await update.message.reply_text("❗ Введіть ID для видалення", reply_markup=OWNER_MENU)
-            return
-            
-        try:
-            ids_to_remove = parse_ids(text)
-            if not ids_to_remove:
-                await update.message.reply_text("❗ Неправильний формат ID", reply_markup=OWNER_MENU)
-                return
-            
-            # Читаємо всі записи
-            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                rows = list(reader)
-            
-            if len(rows) <= 1:  # Тільки заголовки
-                await update.message.reply_text("ℹ Немає записів для видалення", reply_markup=OWNER_MENU)
-                return
-            
-            header = rows[0]
-            data = rows[1:]
-            
-            # Знаходимо існуючі ID
-            existing_ids = {row[0] for row in data}
-            # Фільтруємо тільки ті ID, які існують
-            ids_to_remove = [id_ for id_ in ids_to_remove if id_ in existing_ids]
-            
-            if not ids_to_remove:
-                await update.message.reply_text(
-                    "ℹ Вказані ID не знайдено в базі",
-                    reply_markup=OWNER_MENU
-                )
-                return
-            
-            # Фільтруємо записи
-            new_data = [row for row in data if row[0] not in ids_to_remove]
-            
-            # Записуємо назад
-            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
-                writer.writerows(new_data)
-            
-            await update.message.reply_text(
-                f"🗑 Успішно видалено записів: {len(ids_to_remove)}\n"
-                f"ID: {', '.join(sorted(ids_to_remove))}",
                 reply_markup=OWNER_MENU
             )
         except Exception as e:
