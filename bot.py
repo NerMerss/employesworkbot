@@ -30,7 +30,7 @@ def parse_user_list(env_var: str) -> dict:
     for item in os.getenv(env_var, "").split(","):
         if not item.strip():
             continue
-        parts = item.strip().split(" ", 1)  # Розділяємо тільки по першому пробілу
+        parts = item.strip().split(" ", 1)
         if len(parts) >= 2:
             username = parts[0] if parts[0].startswith("@") else f"@{parts[0]}"
             name = parts[1]
@@ -71,7 +71,7 @@ DELETE_MENU = ReplyKeyboardMarkup(
 )
 
 CONFIRM_MARKUP = ReplyKeyboardMarkup(
-    [["✅ Так", "❌ Ні"]],
+    [["✅ Так", "❌ Ні"], ["🔙 Назад"]],
     resize_keyboard=True
 )
 
@@ -163,11 +163,33 @@ def get_user_level(username: str) -> Optional[str]:
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(item, callback_data=f"{prefix}:{item}")] for item in items]
     buttons.append([InlineKeyboardButton("Ввести вручну", callback_data=f"{prefix}:manual")])
+    buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
 
 def create_model_keyboard(models: List[str]) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(model, callback_data=f"model:{model}")] for model in models]
+    buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
+
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Повертає до головного меню"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.delete_message()
+    
+    username = f"@{update.effective_user.username}"
+    user_level = get_user_level(username)
+    
+    if user_level == "owner":
+        await update.effective_message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
+    elif user_level == "manager":
+        await update.effective_message.reply_text("Меню керівника:", reply_markup=MANAGER_MENU)
+    else:
+        await update.effective_message.reply_text("Меню працівника:", reply_markup=WORKER_MENU)
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Початок взаємодії з ботом"""
@@ -198,7 +220,6 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["user_level"] = user_level
     context.user_data["user_name"] = user_name
     
-    # Для працівників одразу встановлюємо себе як виконавця
     if user_level == "worker":
         context.user_data["executor"] = username
         context.user_data["executor_name"] = user_name
@@ -208,28 +229,26 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return MODEL
     
-    # Для власників та керівників формуємо список виконавців
     if user_level == "owner":
         executors = {**OWNERS, **MANAGERS, **WORKERS}
     else:  # manager
         executors = {username: user_name}
         executors.update(WORKERS)
     
-    # Створюємо кнопки тільки з іменами
     buttons = []
     for user_id, name in executors.items():
-        # Додаємо тільки ім'я, але зберігаємо user_id у callback_data
         buttons.append([InlineKeyboardButton(
-            name,  # Виводимо тільки ім'я
-            callback_data=f"executor:{user_id}:{name}"  # Але передаємо і нік
+            name,
+            callback_data=f"executor:{user_id}:{name}"
         )])
     
-    # Додаємо "Я" першим пунктом для керівників
     if user_level == "manager":
         buttons.insert(0, [InlineKeyboardButton(
             f"Я ({user_name})",
             callback_data=f"executor:{username}:{user_name}"
         )])
+    
+    buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     
     await update.message.reply_text(
         "Оберіть виконавця:",
@@ -241,6 +260,9 @@ async def executor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Обробляє вибір виконавця"""
     query = update.callback_query
     await query.answer()
+    
+    if query.data == "back":
+        return await back_to_menu(update, context)
     
     _, user_id, name = query.data.split(":", 2)
     context.user_data["executor"] = user_id
@@ -256,6 +278,9 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Обробляє вибір моделі"""
     query = update.callback_query
     await query.answer()
+    
+    if query.data == "back":
+        return await back_to_menu(update, context)
     
     selected = query.data.split(":")[1]
     context.user_data["model"] = selected
@@ -276,8 +301,8 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід моделі"""
-    if update.message.text in ["🗑 Видалити записи", "📤 Експорт даних"]:
-        return await handle_text_messages(update, context)
+    if update.message.text == "🔙 Назад":
+        return await back_to_menu(update, context)
     
     model_input = update.message.text.strip()
     if model_input in TESLA_MODELS + OTHER_MODELS:
@@ -297,6 +322,9 @@ async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     await query.answer()
     
+    if query.data == "back":
+        return await back_to_menu(update, context)
+    
     selected = query.data.split(":")[1]
     if selected == "manual":
         await query.edit_message_text("Введіть останні 6 символів VIN:")
@@ -308,8 +336,8 @@ async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід VIN"""
-    if update.message.text in ["🗑 Видалити записи", "📤 Експорт даних"]:
-        return await handle_text_messages(update, context)
+    if update.message.text == "🔙 Назад":
+        return await back_to_menu(update, context)
     
     vin_input = update.message.text.strip()
     if len(vin_input) != 6 or not vin_input.isalnum():
@@ -340,6 +368,9 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     
+    if query.data == "back":
+        return await back_to_menu(update, context)
+    
     work_text = query.data.split(":")[1]
     if work_text == "manual":
         await query.edit_message_text("Введіть, що було зроблено:")
@@ -350,8 +381,8 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід робіт"""
-    if update.message.text in ["🗑 Видалити записи", "📤 Експорт даних"]:
-        return await handle_text_messages(update, context)
+    if update.message.text == "🔙 Назад":
+        return await back_to_menu(update, context)
     
     work_text = update.message.text.strip()
     await save_and_confirm(update, context, work_text)
@@ -367,7 +398,8 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, w
     record_id = CSVManager.save_record(context.user_data, username, user_name, user_level)
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Додати ще", callback_data="restart")]
+        [InlineKeyboardButton("➕ Додати ще", callback_data="restart")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back")]
     ])
     
     if update.callback_query:
@@ -394,16 +426,15 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    # Очищаємо попередні дані
-    context.user_data.clear()
+    if query.data == "back":
+        return await back_to_menu(update, context)
     
-    # Видаляємо попереднє повідомлення
+    context.user_data.clear()
     try:
         await query.delete_message()
     except Exception as e:
         logger.error(f"Не вдалося видалити повідомлення: {e}")
     
-    # Починаємо нову бесіду
     return await add_record(update, context)
 
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -440,7 +471,7 @@ async def ask_ids_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     await update.message.reply_text(
         "Введіть ID записів для видалення (наприклад: 1, 2-5, 7):",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
     )
     context.user_data["delete_type"] = "selected"
 
@@ -449,6 +480,11 @@ async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     username = f"@{update.effective_user.username}"
     if get_user_level(username) != "owner":
         await update.message.reply_text("⛔ У вас немає прав для цієї дії")
+        return
+    
+    if update.message.text == "🔙 Назад":
+        await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
+        context.user_data.pop("delete_type", None)
         return
     
     delete_type = context.user_data.get("delete_type")
@@ -554,22 +590,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Скасовує поточну бесіду"""
-    username = f"@{update.effective_user.username}"
-    user_level = get_user_level(username)
-    
-    if not user_level:
-        await update.message.reply_text("⛔ У вас немає доступу")
-        return ConversationHandler.END
-    
-    if user_level == "owner":
-        await update.message.reply_text("❌ Дію скасовано", reply_markup=OWNER_MENU)
-    elif user_level == "manager":
-        await update.message.reply_text("❌ Дію скасовано", reply_markup=MANAGER_MENU)
-    else:
-        await update.message.reply_text("❌ Дію скасовано", reply_markup=WORKER_MENU)
-    
-    context.user_data.clear()
-    return ConversationHandler.END
+    return await back_to_menu(update, context)
 
 def main() -> None:
     """Запускає бота"""
@@ -586,22 +607,22 @@ def main() -> None:
         entry_points=[
             CommandHandler("start", start),
             MessageHandler(filters.Regex("^➕ Додати запис$"), add_record),
-            CallbackQueryHandler(restart_conversation, pattern="^restart$")
+            CallbackQueryHandler(restart_conversation, pattern="^(restart|back)$")
         ],
         states={
             EXECUTOR: [
-                CallbackQueryHandler(executor_selected, pattern="^executor:"),
+                CallbackQueryHandler(executor_selected, pattern="^(executor:|back)"),
             ],
             MODEL: [
-                CallbackQueryHandler(model_selected, pattern="^model:"),
+                CallbackQueryHandler(model_selected, pattern="^(model:|back)"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, model_manual),
             ],
             VIN: [
-                CallbackQueryHandler(vin_selected, pattern="^vin:"),
+                CallbackQueryHandler(vin_selected, pattern="^(vin:|back)"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, vin_manual),
             ],
             WORK: [
-                CallbackQueryHandler(work_selected, pattern="^work:"),
+                CallbackQueryHandler(work_selected, pattern="^(work:|back)"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, work_manual),
             ]
         },
