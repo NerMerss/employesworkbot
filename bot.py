@@ -17,7 +17,7 @@ import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Константи
+# Константы
 MODEL, VIN, WORK, EXECUTOR = range(4)
 RECENT_ITEMS_LIMIT = 5
 
@@ -25,7 +25,7 @@ RECENT_ITEMS_LIMIT = 5
 TESLA_MODELS = ["Model 3", "Model Y", "Model S", "Model X", "Cybertruck", "Roadster", "Інше (не Tesla)"]
 OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007", "Інше"]
 
-# Налаштування логування
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -59,7 +59,7 @@ class GoogleSheetsManager:
         try:
             col_index = ["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "user_level"].index(field) + 1
             values = self.sheet.col_values(col_index)[1:]
-            return list(dict.fromkeys(reversed(values))[:limit]
+            return list(dict.fromkeys(reversed(values)))[:limit]
         except Exception as e:
             logger.error(f"Error getting recent values: {e}")
             return []
