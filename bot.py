@@ -46,14 +46,18 @@ class GoogleSheetsManager:
         creds_json = base64.b64decode(creds_base64).decode('utf-8')
         return Credentials.from_service_account_info(json.loads(creds_json))
     
-    def _connect(self):
+def _connect(self):
+    try:
         self.client = gspread.authorize(self.credentials)
-        try:
-            self.sheet = self.client.open_by_key(self.spreadsheet_id).worksheet(self.sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-            self.sheet = spreadsheet.add_worksheet(title=self.sheet_name, rows=100, cols=20)
-            self.sheet.append_row(["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "user_level"])
+        self.sheet = self.client.open_by_key(self.spreadsheet_id).worksheet(self.sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+        self.sheet = spreadsheet.add_worksheet(title=self.sheet_name, rows=100, cols=20)
+        self.sheet.append_row(["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "user_level"])
+    except Exception as e:
+        logger.error(f"Error connecting to Google Sheets: {e}")
+        raise
+
     
     def get_recent_values(self, field: str, limit: int = RECENT_ITEMS_LIMIT) -> List[str]:
         try:
