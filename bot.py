@@ -21,7 +21,7 @@ import tempfile
 MODEL, VIN, WORK, DESCRIPTION, UPLOAD_CSV = range(5)
 CSV_FILE = "/data/records.csv"
 RECENT_ITEMS_LIMIT = 5
-MAX_WORK_LENGTH = 64  # Максимальная длина основного описания работы в байтах
+MAX_WORK_LENGTH = 64  # Максимальна довжина основного опису роботи в байтах
 
 # Списки моделей
 TESLA_MODELS = ["Model 3", "Model Y", "Model S", "Model X", "Cybertruck", "Roadster", "Інше (не Tesla)"]
@@ -76,6 +76,11 @@ WORKER_MENU = ReplyKeyboardMarkup(
 
 DESCRIPTION_MARKUP = ReplyKeyboardMarkup(
     [["⏩ Пропустити"], ["🔙 Назад"]],
+    resize_keyboard=True
+)
+
+UPLOAD_MARKUP = ReplyKeyboardMarkup(
+    [["🔙 Назад"]],
     resize_keyboard=True
 )
 
@@ -239,22 +244,23 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     # Для власників і менеджерів показуємо вибір виконавця
     if user_level == "owner":
-        executors = {**OWNERS, **MANAGERS, **WORKERS}
+        executors = {**MANAGERS, **WORKERS}  # Власники бачать менеджерів і працівників
     else:  # manager
-        executors = {username: user_name}
-        executors.update(WORKERS)
+        executors = WORKERS  # Менеджери бачать тільки працівників
     
     buttons = []
+    # Додаємо себе для менеджера
+    if user_level == "manager":
+        buttons.append([InlineKeyboardButton(
+            f"Я ({user_name})",
+            callback_data=f"executor:{username}:{user_name}"
+        )])
+    
+    # Додаємо інших виконавців
     for user_id, name in executors.items():
         buttons.append([InlineKeyboardButton(
             name,
             callback_data=f"executor:{user_id}:{name}"
-        )])
-    
-    if user_level == "manager":
-        buttons.insert(0, [InlineKeyboardButton(
-            f"Я ({user_name})",
-            callback_data=f"executor:{username}:{user_name}"
         )])
     
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
@@ -385,10 +391,13 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     work_text = query.data.split(":")[1]
     if work_text == "manual":
-        await query.edit_message_text("Введіть, що було зроблено (макс. 64 символи):")
+        await query.edit_message_text(
+            "Введіть, що було зроблено (макс. 64 символи):",
+            reply_markup=None  # Видаляємо клавіатуру для ручного вводу
+        )
         return WORK
     
-    # Проверяем длину текста работы
+    # Перевіряємо довжину тексту роботи
     if len(work_text.encode('utf-8')) > MAX_WORK_LENGTH:
         await query.edit_message_text(
             f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
@@ -407,7 +416,7 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if text in SPECIAL_COMMANDS:
         return await handle_text_messages(update, context)
     
-    # Проверяем длину текста работы
+    # Перевіряємо довжину тексту роботи
     if len(text.encode('utf-8')) > MAX_WORK_LENGTH:
         await update.message.reply_text(
             f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
@@ -510,27 +519,29 @@ async def upload_csv_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Будь ласка, надішліть CSV файл для завантаження. "
         "Файл повинен мати такі стовпці:\n" +
         ", ".join(CSVManager.HEADERS),
-        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        reply_markup=UPLOAD_MARKUP
     )
     return UPLOAD_CSV
 
 async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє завантажений CSV файл"""
-    if update.message.document:
-        document = update.message.document
-    elif update.message.text and update.message.text.strip() == "🔙 Назад":
+    if update.message.text and update.message.text.strip() == "🔙 Назад":
         return await back_to_menu(update, context)
-    else:
-        await update.message.reply_text("Будь ласка, надішліть CSV файл.")
+    
+    if not update.message.document:
+        await update.message.reply_text(
+            "Будь ласка, надішліть CSV файл або натисніть '🔙 Назад'",
+            reply_markup=UPLOAD_MARKUP
+        )
         return UPLOAD_CSV
     
     try:
-        # Скачиваем файл во временную директорию
-        file = await context.bot.get_file(document.file_id)
+        # Завантажуємо файл у тимчасову директорію
+        file = await context.bot.get_file(update.message.document.file_id)
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             await file.download_to_drive(temp_file.name)
         
-        # Пытаемся заменить данные
+        # Намагаємось замінити дані
         if CSVManager.replace_data(temp_file.name):
             await update.message.reply_text("✅ Дані успішно оновлено!", reply_markup=OWNER_MENU)
         else:
@@ -539,14 +550,14 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 reply_markup=OWNER_MENU
             )
         
-        # Удаляем временный файл
+        # Видаляємо тимчасовий файл
         try:
             os.unlink(temp_file.name)
         except Exception as e:
-            logger.error(f"Error deleting temp file: {e}")
+            logger.error(f"Помилка видалення тимчасового файлу: {e}")
     
     except Exception as e:
-        logger.error(f"Error processing CSV upload: {e}")
+        logger.error(f"Помилка обробки CSV файлу: {e}")
         await update.message.reply_text(
             "❌ Помилка при обробці файлу. Спробуйте ще раз.",
             reply_markup=OWNER_MENU
@@ -591,6 +602,15 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Оберіть дію з меню")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Логує помилки та повідомляє користувача"""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    
+    if update and update.effective_message:
+        await update.effective_message.reply_text(
+            "❌ Сталася помилка. Спробуйте ще раз або зверніться до адміністратора."
+        )
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Скасовує поточну бесіду"""
     return await back_to_menu(update, context)
@@ -604,6 +624,9 @@ def main() -> None:
     CSVManager.ensure_file_exists()
     
     app = ApplicationBuilder().token(token).build()
+    
+    # Додаємо обробник помилок
+    app.add_error_handler(error_handler)
     
     # Основний обробник бесіди
     conv_handler = ConversationHandler(
