@@ -168,7 +168,8 @@ def get_user_level(username: str) -> Optional[str]:
     return None
 
 def create_keyboard(items: List[str], prefix: str) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(item, callback_data=f"{prefix}:{item}")] for item in items]
+    # Ensure callback data is properly sanitized
+    buttons = [[InlineKeyboardButton(item, callback_data=f"{prefix}:{item.replace(':', '_')}")] for item in items]
     buttons.append([InlineKeyboardButton("Ввести вручну", callback_data=f"{prefix}:manual")])
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
@@ -357,6 +358,8 @@ async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return VIN
     
     context.user_data["vin"] = text.upper()
+    
+    # Send new message instead of trying to edit previous one
     return await show_work_options(update, context)
 
 async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -364,16 +367,11 @@ async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     works = CSVManager.get_recent_values("work", 6)
     keyboard = create_keyboard(works, "work")
     
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "Що було зроблено?",
-            reply_markup=keyboard
-        )
-    else:
-        await update.message.reply_text(
-            "Що було зроблено?",
-            reply_markup=keyboard
-        )
+    # Always send a new message instead of trying to edit
+    await update.message.reply_text(
+        "Що було зроблено?",
+        reply_markup=keyboard
+    )
     return WORK
 
 async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
