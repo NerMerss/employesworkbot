@@ -616,7 +616,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await back_to_menu(update, context)
 
 def main() -> None:
-    app.add_handler(MessageHandler(filters.Document.FileExtension("csv"), handle_csv_upload))
+    
     """Запускає бота"""
     if not (token := os.getenv("BOT_TOKEN")):
         logger.error("Не встановлено змінну BOT_TOKEN!")
