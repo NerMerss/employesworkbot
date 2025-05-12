@@ -1,6 +1,8 @@
 import os
 import csv
 import logging
+import base64
+import json
 from typing import Dict, List, Optional
 from telegram import (
     Update,
@@ -15,10 +17,11 @@ from telegram.ext import (
 )
 import datetime
 import tempfile
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Константи
 MODEL, VIN, WORK, DESCRIPTION, UPLOAD_CSV = range(5)
-CSV_FILE = "/data/records.csv"
 RECENT_ITEMS_LIMIT = 5
 MAX_WORK_LENGTH = 64  # Максимальна довжина основного опису роботи в байтах
 
@@ -83,44 +86,90 @@ UPLOAD_MARKUP = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-class CSVManager:
+class GoogleSheetsManager:
     HEADERS = ["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "description", "user_level"]
     
     @staticmethod
-    def ensure_file_exists():
-        if not os.path.exists(CSV_FILE):
-            os.makedirs(os.path.dirname(CSV_FILE), exist_ok=True)
-            with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
-                csv.writer(f).writerow(CSVManager.HEADERS)
+    def get_client():
+        """Initialize gspread client using base64-encoded credentials."""
+        try:
+            # Decode base64 credentials
+            credentials_json = base64.b64decode(os.getenv("GOOGLE_SHEETS_CREDENTIALS_BASE64")).decode('utf-8')
+            credentials_dict = json.loads(credentials_json)
+            
+            # Set up credentials
+            scope-dotenv.scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+            
+            # Authorize and return gspread client
+            return gspread.authorize(credentials)
+        except Exception as e:
+            logger.error(f"Error initializing Google Sheets client: {e}")
+            raise
+    
+    @staticmethod
+    def ensure_sheet_exists():
+        """Ensure the spreadsheet and worksheet exist with correct headers."""
+        try:
+            client = GoogleSheetsManager.get_client()
+            spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            
+            # Try to access the first worksheet or create it
+            try:
+                worksheet = spreadsheet.sheet1
+            except gspread.exceptions.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(title="Sheet1", rows=100, cols=len(GoogleSheetsManager.HEADERS))
+            
+            # Check if headers exist, if not, set them
+            if not worksheet.row_values(1):
+                worksheet.append_row(GoogleSheetsManager.HEADERS)
+        except Exception as e:
+            logger.error(f"Error ensuring sheet exists: {e}")
+            raise
     
     @staticmethod
     def get_recent_values(field: str, limit: int = RECENT_ITEMS_LIMIT) -> List[str]:
-        values = []
-        seen = set()
+        """Retrieve recent unique values for a given field."""
         try:
-            with open(CSV_FILE, newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reversed(list(reader)):
-                    if len(values) >= limit:
-                        break
-                    val = row.get(field, "").strip()
-                    if val and val not in seen:
-                        seen.add(val)
-                        values.append(val)
-        except FileNotFoundError:
-            logger.warning("Файл CSV не знайдено")
-        return values
+            client = GoogleSheetsManager.get_client()
+            spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+            worksheet = client.open_by_key(spreadsheet_id).sheet1
+            
+            # Get all values
+            all_values = worksheet.get_all_records()
+            values = []
+            seen = set()
+            
+            # Iterate in reverse to get most recent first
+            for row in reversed(all_values):
+                if len(values) >= limit:
+                    break
+                val = str(row.get(field, "")).strip()
+                if val and val not in seen:
+                    seen.add(val)
+                    values.append(val)
+            return values
+        except Exception as e:
+            logger.error(f"Error retrieving recent values: {e}")
+            return []
     
     @staticmethod
     def save_record(user_data: Dict[str, str], username: str, user_name: str, user_level: str) -> int:
-        CSVManager.ensure_file_exists()
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        with open(CSV_FILE, 'r+', newline='', encoding='utf-8') as f:
-            rows = list(csv.reader(f))
-            next_id = int(rows[-1][0]) + 1 if len(rows) > 1 else 1
-            writer = csv.writer(f)
-            writer.writerow([
+        """Save a new record to Google Sheets and return the record ID."""
+        try:
+            GoogleSheetsManager.ensure_sheet_exists()
+            client = GoogleSheetsManager.get_client()
+            spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+            worksheet = client.open_by_key(spreadsheet_id).sheet1
+            
+            # Get the last ID
+            all_values = worksheet.get_all_values()
+            next_id = int(all_values[-1][0]) + 1 if len(all_values) > 1 and all_values[-1][0].isdigit() else 1
+            
+            # Prepare the record
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            record = [
                 next_id,
                 timestamp,
                 username,
@@ -132,28 +181,54 @@ class CSVManager:
                 user_data["work"],
                 user_data.get("description", ""),
                 user_level
-            ])
-        return next_id
+            ]
+            
+            # Append the record
+            worksheet.append_row(record)
+            return next_id
+        except Exception as e:
+            logger.error(f"Error saving record to Google Sheets: {e}")
+            raise
     
     @staticmethod
     def replace_data(new_data_path: str) -> bool:
+        """Replace all data in the Google Sheet with data from a CSV file."""
         try:
-            # Validate the new file
+            client = GoogleSheetsManager.get_client()
+            spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+            worksheet = client.open_by_key(spreadsheet_id).sheet1
+            
+            # Validate the new CSV file
             with open(new_data_path, newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                if not reader.fieldnames or set(reader.fieldnames) != set(CSVManager.HEADERS):
+                if not reader.fieldnames or set(reader.fieldnames) != set(GoogleSheetsManager.HEADERS):
+                    logger.error("Invalid CSV headers")
                     return False
                 
-                # Make a backup
-                backup_path = f"{CSV_FILE}.bak"
-                if os.path.exists(CSV_FILE):
-                    os.replace(CSV_FILE, backup_path)
+                # Clear existing data
+                worksheet.clear()
                 
-                # Replace the file
-                os.replace(new_data_path, CSV_FILE)
-                return True
+                # Write headers
+                worksheet.append_row(GoogleSheetsManager.HEADERS)
+                
+                # Write new data
+                for row in reader:
+                    worksheet.append_row([
+                        row["id"],
+                        row["timestamp"],
+                        row["user"],
+                        row["user_name"],
+                        row["executor"],
+                        row["executor_name"],
+                        row["model"],
+                        row["vin"],
+                        row["work"],
+                        row["description"],
+                        row["user_level"]
+                    ])
+            return True
         except Exception as e:
-            logger.error(f"Error replacing CSV file: {e}")
+            logger.error(f"Error replacing Google Sheets data: {e}")
             return False
 
 def get_user_level(username: str) -> Optional[str]:
@@ -307,7 +382,7 @@ async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return MODEL
     
-    vins = CSVManager.get_recent_values("vin")
+    vins = GoogleSheetsManager.get_recent_values("vin")
     await query.edit_message_text(
         "Оберіть VIN або введіть вручну:",
         reply_markup=create_keyboard(vins, "vin")
@@ -326,7 +401,7 @@ async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     else:
         context.user_data["model"] = f"Інше: {text}"
     
-    vins = CSVManager.get_recent_values("vin")
+    vins = GoogleSheetsManager.get_recent_values("vin")
     await update.message.reply_text(
         "Оберіть VIN або введіть вручну:",
         reply_markup=create_keyboard(vins, "vin")
@@ -366,7 +441,7 @@ async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показує варіанти робіт"""
-    works = CSVManager.get_recent_values("work", 6)
+    works = GoogleSheetsManager.get_recent_values("work", 6)
     keyboard = create_keyboard(works, "work")
     
     if update.callback_query:
@@ -415,7 +490,7 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if len(work_text.encode('utf-8')) > MAX_WORK_LENGTH:
         await query.edit_message_text(
             f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
-            reply_markup=create_keyboard(CSVManager.get_recent_values("work", 6), "work")
+            reply_markup=create_keyboard(GoogleSheetsManager.get_recent_values("work", 6), "work")
         )
         return WORK
     
@@ -434,7 +509,7 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if len(text.encode('utf-8')) > MAX_WORK_LENGTH:
         await update.message.reply_text(
             f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
-            reply_markup=create_keyboard(CSVManager.get_recent_values("work", 6), "work")
+            reply_markup=create_keyboard(GoogleSheetsManager.get_recent_values("work", 6), "work")
         )
         return WORK
     
@@ -485,7 +560,7 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_name = context.user_data["user_name"]
     user_level = context.user_data["user_level"]
     
-    record_id = CSVManager.save_record(context.user_data, username, user_name, user_level)
+    record_id = GoogleSheetsManager.save_record(context.user_data, username, user_name, user_level)
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Назад", callback_data="back")]
@@ -523,21 +598,37 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Експортує дані у CSV"""
+    """Export data from Google Sheets as a CSV file."""
     username = f"@{update.effective_user.username}"
     if get_user_level(username) != "owner":
         await update.message.reply_text("⛔ У вас немає прав для цієї дії")
         return
     
-    if not os.path.exists(CSV_FILE):
-        await update.message.reply_text("❌ Файл даних не знайдено")
-        return
-    
     try:
+        client = GoogleSheetsManager.get_client()
+        spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+        worksheet = client.open_by_key(spreadsheet_id).sheet1
+        
+        # Get all values
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            await update.message.reply_text("❌ Дані відсутні")
+            return
+        
+        # Create a temporary CSV file
+        temp_file_path = os.path.join(tempfile.gettempdir(), "service_records.csv")
+        with open(temp_file_path, mode='w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerows(all_values)
+        
+        # Send the file
         await update.message.reply_document(
-            document=open(CSV_FILE, 'rb'),
+            document=open(temp_file_path, 'rb'),
             filename='service_records.csv'
         )
+        
+        # Clean up
+        os.unlink(temp_file_path)
     except Exception as e:
         logger.error(f"Error exporting data: {e}")
         await update.message.reply_text("❌ Помилка при експорті даних")
@@ -552,7 +643,7 @@ async def upload_csv_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         "Будь ласка, надішліть CSV файл для завантаження. "
         "Файл повинен мати такі стовпці:\n" +
-        ", ".join(CSVManager.HEADERS),
+        ", ".join(GoogleSheetsManager.HEADERS),
         reply_markup=UPLOAD_MARKUP
     )
     return UPLOAD_CSV
@@ -576,7 +667,7 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await file.download_to_drive(temp_file_path)
         
         # Намагаємось замінити дані
-        if CSVManager.replace_data(temp_file_path):
+        if GoogleSheetsManager.replace_data(temp_file_path):
             await update.message.reply_text("✅ Дані успішно оновлено!", reply_markup=OWNER_MENU)
         else:
             await update.message.reply_text(
@@ -655,7 +746,7 @@ def main() -> None:
         logger.error("Не встановлено змінну BOT_TOKEN!")
         return
     
-    CSVManager.ensure_file_exists()
+    GoogleSheetsManager.ensure_sheet_exists()
     
     app = ApplicationBuilder().token(token).build()
     
