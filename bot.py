@@ -608,7 +608,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            "❌ Сталася помилка. Спробуйте ще раз або зверніться до адміністратора."
+            "❌ Сталася помилка."
         )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
