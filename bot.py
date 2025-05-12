@@ -14,6 +14,7 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
 import datetime
+from telegram.ext import filters
 
 # Константи
 MODEL, VIN, WORK, EXECUTOR = range(4)
@@ -330,21 +331,21 @@ async def model_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return VIN
 
 async def vin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробляє вибір VIN"""
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == "back":
         return await back_to_menu(update, context)
-    
+
     selected = query.data.split(":")[1]
     if selected == "manual":
         await query.edit_message_text("Введіть останні 6 символів VIN:")
         return VIN
-    
+
     context.user_data["vin"] = selected
-    await query.edit_message_text(f"VIN: {selected}")
     return await show_work_options(update, context)
+
+
 
 async def vin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід VIN"""
