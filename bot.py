@@ -15,13 +15,12 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
 import datetime
-import tempfile
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # Константи
-MODEL, VIN, WORK, DESCRIPTION, UPLOAD_CSV = range(5)
+MODEL, VIN, WORK, DESCRIPTION = range(4)
 RECENT_ITEMS_LIMIT = 5
 MAX_WORK_LENGTH = 64  # Максимальна довжина основного опису роботи в байтах
 
@@ -31,8 +30,7 @@ OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007
 
 # Список спеціальних команд
 SPECIAL_COMMANDS = [
-    "➕ Додати запис", "📤 Завантажити дані", "📥 Завантажити таблицю",
-    "🔙 Назад", "✅ Так", "❌ Ні", "⏩ Пропустити"
+    "➕ Додати запис", "🔙 Назад", "✅ Так", "❌ Ні", "⏩ Пропустити"
 ]
 
 # Отримуємо налаштування з змінних оточення
@@ -67,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 # Клавіатури
 OWNER_MENU = ReplyKeyboardMarkup(
-    [["➕ Додати запис"], ["📤 Завантажити дані", "📥 Завантажити таблицю"]],
+    [["➕ Додати запис"]],
     resize_keyboard=True
 )
 
@@ -83,11 +81,6 @@ WORKER_MENU = ReplyKeyboardMarkup(
 
 DESCRIPTION_MARKUP = ReplyKeyboardMarkup(
     [["⏩ Пропустити"], ["🔙 Назад"]],
-    resize_keyboard=True
-)
-
-UPLOAD_MARKUP = ReplyKeyboardMarkup(
-    [["🔙 Назад"]],
     resize_keyboard=True
 )
 
@@ -200,21 +193,6 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Помилка при збереженні запису: {e}")
             return 0
-    
-    def export_to_csv(self, file_path: str) -> bool:
-        """Експортує дані з Google Sheets у CSV файл"""
-        try:
-            data = self._get_sheet_data("Sheet1")
-            if not data:
-                return False
-            
-            with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerows(data)
-            return True
-        except Exception as e:
-            logger.error(f"Помилка при експорті даних у CSV: {e}")
-            return False
 
 # Ініціалізуємо менеджер Google Sheets
 sheets_manager = GoogleSheetsManager()
@@ -550,10 +528,6 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     record_id = sheets_manager.save_record(context.user_data, username, user_name, user_level)
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Назад", callback_data="back")]
-    ])
-    
     message_text = (
         f"✅ Запис #{record_id} збережено\n"
         f"Виконавець: {context.user_data['executor_name']}\n"
@@ -567,132 +541,15 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(
-                message_text,
-                reply_markup=keyboard
-            )
+            await update.callback_query.edit_message_text(message_text)
         except Exception as e:
             logger.error(f"Error editing message: {e}")
-            await update.callback_query.message.reply_text(
-                message_text,
-                reply_markup=keyboard
-            )
+            await update.callback_query.message.reply_text(message_text)
     else:
-        await update.message.reply_text(
-            message_text,
-            reply_markup=keyboard
-        )
+        await update.message.reply_text(message_text)
     
-    return ConversationHandler.END
-
-async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Експортує дані у CSV"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
-    
-    try:
-        # Створюємо тимчасовий файл
-        with tempfile.NamedTemporaryFile(mode='w+', suffix='.csv', delete=False, encoding='utf-8') as temp_file:
-            temp_path = temp_file.name
-        
-        # Експортуємо дані у CSV
-        if sheets_manager.export_to_csv(temp_path):
-            await update.message.reply_document(
-                document=open(temp_path, 'rb'),
-                filename='service_records.csv'
-            )
-        else:
-            await update.message.reply_text("❌ Помилка при експорті даних")
-        
-        # Видаляємо тимчасовий файл
-        try:
-            os.unlink(temp_path)
-        except Exception as e:
-            logger.error(f"Помилка видалення тимчасового файлу: {e}")
-    except Exception as e:
-        logger.error(f"Помилка при експорті даних: {e}")
-        await update.message.reply_text("❌ Помилка при експорті даних")
-
-async def upload_csv_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Починає процес завантаження CSV файлу"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return ConversationHandler.END
-    
-    await update.message.reply_text(
-        "Будь ласка, надішліть CSV файл для завантаження. "
-        "Файл повинен мати такі стовпці:\n" +
-        ", ".join(GoogleSheetsManager.HEADERS),
-        reply_markup=UPLOAD_MARKUP
-    )
-    return UPLOAD_CSV
-
-async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробляє завантажений CSV файл"""
-    if update.message.text and update.message.text.strip() == "🔙 Назад":
-        return await back_to_menu(update, context)
-    
-    if not update.message.document or not update.message.document.file_name.lower().endswith('.csv'):
-        await update.message.reply_text(
-            "Будь ласка, надішліть CSV файл (розширення .csv) або натисніть '🔙 Назад'",
-            reply_markup=UPLOAD_MARKUP
-        )
-        return UPLOAD_CSV
-    
-    try:
-        # Завантажуємо файл у тимчасову директорію
-        file = await context.bot.get_file(update.message.document.file_id)
-        temp_file_path = os.path.join(tempfile.gettempdir(), update.message.document.file_name)
-        await file.download_to_drive(temp_file_path)
-        
-        # Читаємо CSV файл
-        with open(temp_file_path, 'r', encoding='utf-8') as f:
-            csv_data = list(csv.reader(f))
-        
-        # Перевіряємо заголовки
-        if not csv_data or csv_data[0] != GoogleSheetsManager.HEADERS:
-            await update.message.reply_text(
-                "❌ Помилка: файл має неправильний формат. Перевірте структуру.",
-                reply_markup=OWNER_MENU
-            )
-            return ConversationHandler.END
-        
-        # Очищаємо аркуш і завантажуємо нові дані
-        try:
-            # Очищаємо аркуш
-            sheets_manager.sheet.values().clear(
-                spreadsheetId=GOOGLE_SHEETS_SPREADSHEET_ID,
-                range="Sheet1"
-            ).execute()
-            
-            # Додаємо нові дані
-            sheets_manager._append_to_sheet("Sheet1", csv_data)
-            
-            await update.message.reply_text("✅ Дані успішно оновлено!", reply_markup=OWNER_MENU)
-        except HttpError as error:
-            logger.error(f"Помилка при оновленні даних у Google Sheets: {error}")
-            await update.message.reply_text(
-                "❌ Помилка при оновленні даних у Google Sheets",
-                reply_markup=OWNER_MENU
-            )
-        
-        # Видаляємо тимчасовий файл
-        try:
-            os.unlink(temp_file_path)
-        except Exception as e:
-            logger.error(f"Помилка видалення тимчасового файлу: {e}")
-    
-    except Exception as e:
-        logger.error(f"Помилка обробки CSV файлу: {e}")
-        await update.message.reply_text(
-            "❌ Помилка при обробці файлу. Спробуйте ще раз.",
-            reply_markup=OWNER_MENU
-        )
-    
-    return ConversationHandler.END
+    # Повертаємо до головного меню
+    return await back_to_menu(update, context)
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обробляє текстові повідомлення"""
@@ -708,10 +565,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if text in SPECIAL_COMMANDS:
         if text == "➕ Додати запис":
             await add_record(update, context)
-        elif text == "📤 Завантажити дані" and user_level == "owner":
-            await export_data(update, context)
-        elif text == "📥 Завантажити таблицю" and user_level == "owner":
-            await upload_csv_start(update, context)
         elif text == "🔙 Назад":
             await back_to_menu(update, context)
         return
@@ -726,8 +579,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await work_manual(update, context)
         elif current_state.get('state') == DESCRIPTION:
             await handle_description(update, context)
-        elif current_state.get('state') == UPLOAD_CSV:
-            await handle_csv_upload(update, context)
     else:
         await update.message.reply_text("Оберіть дію з меню")
 
@@ -782,9 +633,6 @@ def main() -> None:
             ],
             DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description),
-            ],
-            UPLOAD_CSV: [
-                MessageHandler(filters.TEXT | filters.Document.ALL, handle_csv_upload),
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -798,5 +646,4 @@ def main() -> None:
     app.run_polling()
 
 if __name__ == '__main__':
-    import csv  # Додаємо імпорт csv для роботи з тимчасовими файлами
     main()
