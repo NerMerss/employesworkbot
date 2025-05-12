@@ -1,7 +1,7 @@
 import os
 import csv
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -16,9 +16,10 @@ from telegram.ext import (
 import datetime
 
 # Константи
-MODEL, VIN, WORK, EXECUTOR = range(4)
+MODEL, VIN, WORK, DESCRIPTION = range(4)
 CSV_FILE = "/data/records.csv"
 RECENT_ITEMS_LIMIT = 5
+MAX_WORK_LENGTH = 64  # Максимальная длина основного описания работы в байтах
 
 # Списки моделей
 TESLA_MODELS = ["Model 3", "Model Y", "Model S", "Model X", "Cybertruck", "Roadster", "Інше (не Tesla)"]
@@ -26,9 +27,8 @@ OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007
 
 # Список спеціальних команд
 SPECIAL_COMMANDS = [
-    "➕ Додати запис", "🗑 Видалити записи", "📤 Експорт даних",
-    "❌ Видалити ВСЕ", "🔢 Видалити за ID", "🔙 Назад",
-    "✅ Так", "❌ Ні"
+    "➕ Додати запис", "📤 Завантажити дані",
+    "🔙 Назад", "✅ Так", "❌ Ні", "⏩ Пропустити"
 ]
 
 def parse_user_list(env_var: str) -> dict:
@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 # Клавіатури
 OWNER_MENU = ReplyKeyboardMarkup(
-    [["➕ Додати запис"], ["🗑 Видалити записи", "📤 Експорт даних"]],
+    [["➕ Додати запис"], ["📤 Завантажити дані"]],
     resize_keyboard=True
 )
 
@@ -72,18 +72,18 @@ WORKER_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-DELETE_MENU = ReplyKeyboardMarkup(
-    [["❌ Видалити ВСЕ"], ["🔢 Видалити за ID"], ["🔙 Назад"]],
-    resize_keyboard=True
-)
-
 CONFIRM_MARKUP = ReplyKeyboardMarkup(
     [["✅ Так", "❌ Ні"], ["🔙 Назад"]],
     resize_keyboard=True
 )
 
+DESCRIPTION_MARKUP = ReplyKeyboardMarkup(
+    [["⏩ Пропустити"], ["🔙 Назад"]],
+    resize_keyboard=True
+)
+
 class CSVManager:
-    HEADERS = ["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "user_level"]
+    HEADERS = ["id", "timestamp", "user", "user_name", "executor", "executor_name", "model", "vin", "work", "description", "user_level"]
     
     @staticmethod
     def ensure_file_exists():
@@ -128,30 +128,10 @@ class CSVManager:
                 user_data["model"],
                 user_data["vin"],
                 user_data["work"],
+                user_data.get("description", ""),
                 user_level
             ])
         return next_id
-    
-    @staticmethod
-    def delete_records(ids_to_remove: Optional[Set[str]] = None) -> bool:
-        try:
-            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
-                rows = list(csv.reader(f))
-            
-            if not rows:
-                return False
-            
-            header, data = rows[0], rows[1:]
-            new_data = [row for row in data if not ids_to_remove or row[0] not in ids_to_remove]
-            
-            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
-                writer.writerows(new_data)
-            return True
-        except Exception as e:
-            logger.error(f"Помилка при видаленні: {e}")
-            return False
 
 def get_user_level(username: str) -> Optional[str]:
     """Повертає рівень доступу користувача"""
@@ -264,24 +244,6 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Оберіть виконавця:",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
-    return EXECUTOR
-
-async def executor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробляє вибір виконавця"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "back":
-        return await back_to_menu(update, context)
-    
-    _, user_id, name = query.data.split(":", 2)
-    context.user_data["executor"] = user_id
-    context.user_data["executor_name"] = name
-    
-    await query.edit_message_text(
-        "Виберіть модель авто:",
-        reply_markup=create_model_keyboard(TESLA_MODELS)
-    )
     return MODEL
 
 async def model_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -366,12 +328,12 @@ async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            "Що було зроблено?",
+            "Що було зроблено? (макс. 64 символи)",
             reply_markup=keyboard
         )
     else:
         await update.message.reply_text(
-            "Що було зроблено?",
+            "Що було зроблено? (макс. 64 символи)",
             reply_markup=keyboard
         )
     return WORK
@@ -386,11 +348,20 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     work_text = query.data.split(":")[1]
     if work_text == "manual":
-        await query.edit_message_text("Введіть, що було зроблено:")
+        await query.edit_message_text("Введіть, що було зроблено (макс. 64 символи):")
         return WORK
     
-    await save_and_confirm(update, context, work_text)
-    return ConversationHandler.END
+    # Проверяем длину текста работы
+    if len(work_text.encode('utf-8')) > MAX_WORK_LENGTH:
+        await query.edit_message_text(
+            f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
+            reply_markup=create_keyboard(CSVManager.get_recent_values("work", 6), "work")
+        )
+        return WORK
+    
+    context.user_data["work"] = work_text
+    await ask_for_description(update, context)
+    return DESCRIPTION
 
 async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє ручний ввід робіт"""
@@ -399,205 +370,81 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if text in SPECIAL_COMMANDS:
         return await handle_text_messages(update, context)
     
-    await save_and_confirm(update, context, text)
-    return ConversationHandler.END
+    # Проверяем длину текста работы
+    if len(text.encode('utf-8')) > MAX_WORK_LENGTH:
+        await update.message.reply_text(
+            f"❗ Опис роботи занадто довгий (макс. {MAX_WORK_LENGTH} байт). Спробуйте ще раз:",
+            reply_markup=create_keyboard(CSVManager.get_recent_values("work", 6), "work")
+        )
+        return WORK
+    
+    context.user_data["work"] = text
+    await ask_for_description(update, context)
+    return DESCRIPTION
 
-async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, work_text: str) -> None:
+async def ask_for_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запитує додатковий опис"""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "Бажаєте додати додатковий опис?",
+            reply_markup=DESCRIPTION_MARKUP
+        )
+    else:
+        await update.message.reply_text(
+            "Бажаєте додати додатковий опис?",
+            reply_markup=DESCRIPTION_MARKUP
+        )
+
+async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє додатковий опис"""
+    text = update.message.text.strip()
+    
+    if text in SPECIAL_COMMANDS:
+        if text == "⏩ Пропустити":
+            context.user_data["description"] = ""
+            return await save_and_confirm(update, context)
+        elif text == "🔙 Назад":
+            return await show_work_options(update, context)
+        return DESCRIPTION
+    
+    context.user_data["description"] = text
+    return await save_and_confirm(update, context)
+
+async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Зберігає запис і підтверджує"""
     username = f"@{update.effective_user.username}"
     user_name = context.user_data["user_name"]
     user_level = context.user_data["user_level"]
     
-    context.user_data["work"] = work_text
     record_id = CSVManager.save_record(context.user_data, username, user_name, user_level)
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Назад", callback_data="back")]
     ])
     
+    message_text = (
+        f"✅ Запис #{record_id} збережено\n"
+        f"Виконавець: {context.user_data['executor_name']}\n"
+        f"Модель: {context.user_data['model']}\n"
+        f"VIN: {context.user_data['vin']}\n"
+        f"Робота: {context.user_data['work']}"
+    )
+    
+    if context.user_data.get("description"):
+        message_text += f"\nДодатковий опис: {context.user_data['description']}"
+    
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            f"✅ Запис #{record_id} збережено\n"
-            f"Виконавець: {context.user_data['executor_name']}\n"
-            f"Модель: {context.user_data['model']}\n"
-            f"VIN: {context.user_data['vin']}\n"
-            f"Робота: {work_text}",
+            message_text,
             reply_markup=keyboard
         )
     else:
         await update.message.reply_text(
-            f"✅ Запис #{record_id} збережено\n"
-            f"Виконавець: {context.user_data['executor_name']}\n"
-            f"Модель: {context.user_data['model']}\n"
-            f"VIN: {context.user_data['vin']}\n"
-            f"Робота: {work_text}",
+            message_text,
             reply_markup=keyboard
         )
-
-async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показує меню видалення"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
     
-    await update.message.reply_text(
-        "Оберіть тип видалення:",
-        reply_markup=DELETE_MENU
-    )
-
-async def ask_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Запитує підтвердження для видалення всіх записів"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
-    
-    await update.message.reply_text(
-        "❗ Ви впевнені, що хочете видалити ВСІ записи?",
-        reply_markup=CONFIRM_MARKUP
-    )
-    context.user_data["delete_type"] = "all"
-
-async def ask_ids_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Запитує ID записів для видалення"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
-    
-    # Спочатку показуємо список доступних ID
-    try:
-        with open(CSV_FILE, newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            records = list(reader)
-            
-        if not records:
-            await update.message.reply_text("ℹ Немає записів для видалення", reply_markup=OWNER_MENU)
-            return
-            
-        # Формуємо список останніх 10 записів для прикладу
-        last_records = records[-10:]
-        message = "Доступні записи (останні 10):\n"
-        message += "\n".join(
-            f"ID: {record['id']}, Модель: {record['model']}, VIN: {record['vin']}"
-            for record in last_records
-        )
-        message += "\n\nВведіть ID для видалення (наприклад: 1, 2-5, 7):"
-        
-        await update.message.reply_text(
-            message,
-            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-        )
-        context.user_data["delete_type"] = "selected"
-        
-    except Exception as e:
-        logger.error(f"Помилка при читанні записів: {e}")
-        await update.message.reply_text(
-            "❌ Помилка при отриманні списку записів",
-            reply_markup=OWNER_MENU
-        )
-
-async def execute_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Виконує видалення записів"""
-    username = f"@{update.effective_user.username}"
-    if get_user_level(username) != "owner":
-        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
-        return
-    
-    text = update.message.text.strip()
-    
-    if text == "🔙 Назад":
-        await update.message.reply_text("Меню власника:", reply_markup=OWNER_MENU)
-        context.user_data.pop("delete_type", None)
-        return
-    
-    delete_type = context.user_data.get("delete_type")
-    
-    if delete_type == "all":
-        if text == "✅ Так":
-            try:
-                with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(CSVManager.HEADERS)
-                await update.message.reply_text("🗑 Всі записи видалено!", reply_markup=OWNER_MENU)
-            except Exception as e:
-                logger.error(f"Помилка при видаленні всіх записів: {e}")
-                await update.message.reply_text("❌ Помилка при видаленні", reply_markup=OWNER_MENU)
-        else:
-            await update.message.reply_text("❌ Видалення скасовано", reply_markup=OWNER_MENU)
-    
-    elif delete_type == "selected":
-        if not text:
-            await update.message.reply_text("❗ Введіть ID для видалення", reply_markup=OWNER_MENU)
-            return
-            
-        try:
-            # Отримуємо список ID для видалення
-            ids_to_remove = parse_ids(text)
-            if not ids_to_remove:
-                await update.message.reply_text("❗ Неправильний формат ID", reply_markup=OWNER_MENU)
-                return
-            
-            # Читаємо всі записи
-            with open(CSV_FILE, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-            
-            if not rows:
-                await update.message.reply_text("ℹ Немає записів для видалення", reply_markup=OWNER_MENU)
-                return
-            
-            # Фільтруємо записи, залишаючи ті, які НЕ потрібно видаляти
-            new_rows = [row for row in rows if row['id'] not in ids_to_remove]
-            
-            # Якщо кількість рядків не змінилася - значить не знайшли жодного ID
-            if len(new_rows) == len(rows):
-                await update.message.reply_text(
-                    "ℹ Вказані ID не знайдено в базі",
-                    reply_markup=OWNER_MENU
-                )
-                return
-            
-            # Записуємо оновлені дані назад у файл
-            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=CSVManager.HEADERS)
-                writer.writeheader()
-                writer.writerows(new_rows)
-            
-            # Формуємо список видалених ID (які реально були в файлі)
-            deleted_ids = [row['id'] for row in rows if row['id'] in ids_to_remove]
-            
-            await update.message.reply_text(
-                f"🗑 Успішно видалено записів: {len(deleted_ids)}\n"
-                f"ID: {', '.join(sorted(deleted_ids))}",
-                reply_markup=OWNER_MENU
-            )
-        except Exception as e:
-            logger.error(f"Помилка при видаленні: {e}")
-            await update.message.reply_text(
-                "❌ Помилка при видаленні. Спробуйте ще раз.",
-                reply_markup=OWNER_MENU
-            )
-    
-    context.user_data.pop("delete_type", None)
-
-def parse_ids(id_str: str) -> Set[str]:
-    """Розбирає рядок з ID на множину унікальних ID"""
-    ids = set()
-    parts = [p.strip() for p in id_str.split(",") if p.strip()]
-    
-    for part in parts:
-        if "-" in part:
-            try:
-                start, end = map(int, part.split("-"))
-                ids.update(str(i) for i in range(start, end + 1))
-            except ValueError:
-                continue
-        else:
-            if part.isdigit():
-                ids.add(part)
-    return ids
+    return ConversationHandler.END
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Експортує дані у CSV"""
@@ -629,18 +476,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if text in SPECIAL_COMMANDS:
         if text == "➕ Додати запис":
             await add_record(update, context)
-        elif text == "🗑 Видалити записи" and user_level == "owner":
-            await show_delete_menu(update, context)
-        elif text == "📤 Експорт даних" and user_level == "owner":
+        elif text == "📤 Завантажити дані" and user_level == "owner":
             await export_data(update, context)
-        elif text == "❌ Видалити ВСЕ" and user_level == "owner":
-            await ask_delete_confirmation(update, context)
-        elif text == "🔢 Видалити за ID" and user_level == "owner":
-            await ask_ids_to_delete(update, context)
         elif text == "🔙 Назад":
             await back_to_menu(update, context)
-        elif text in ["✅ Так", "❌ Ні"] and user_level == "owner" and "delete_type" in context.user_data:
-            await execute_deletion(update, context)
         return
     
     current_state = await context.application.persistence.get_conversation(update.effective_chat.id)
@@ -651,6 +490,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await vin_manual(update, context)
         elif current_state.get('state') == WORK:
             await work_manual(update, context)
+        elif current_state.get('state') == DESCRIPTION:
+            await handle_description(update, context)
     else:
         await update.message.reply_text("Оберіть дію з меню")
 
@@ -676,9 +517,6 @@ def main() -> None:
             CallbackQueryHandler(back_to_menu, pattern="^back$")
         ],
         states={
-            EXECUTOR: [
-                CallbackQueryHandler(executor_selected, pattern="^executor:"),
-            ],
             MODEL: [
                 CallbackQueryHandler(model_selected, pattern="^model:"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, model_manual),
@@ -690,6 +528,9 @@ def main() -> None:
             WORK: [
                 CallbackQueryHandler(work_selected, pattern="^work:"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, work_manual),
+            ],
+            DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description),
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
