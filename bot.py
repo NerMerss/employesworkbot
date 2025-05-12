@@ -608,7 +608,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            "❌ Сталася помилка.    "
+            "❌ Сталася помилка. Спробуйте ще раз або зверніться до адміністратора."
         )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -662,8 +662,7 @@ def main() -> None:
     
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
-    app.add_handler(MessageHandler(filters.Document.FileExtension("csv"), handle_csv_upload))
-
+    
     logger.info("Бот запущений...")
     app.run_polling()
 
