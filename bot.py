@@ -8,7 +8,6 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    Document
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -90,6 +89,7 @@ class CSVManager:
     @staticmethod
     def ensure_file_exists():
         if not os.path.exists(CSV_FILE):
+            os.makedirs(os.path.dirname(CSV_FILE), exist_ok=True)
             with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
                 csv.writer(f).writerow(CSVManager.HEADERS)
     
@@ -370,10 +370,17 @@ async def show_work_options(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = create_keyboard(works, "work")
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "Що було зроблено? (макс. 64 символи)",
-            reply_markup=keyboard
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                "Що було зроблено? (макс. 64 символи)",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            logger.error(f"Error editing message: {e}")
+            await update.callback_query.message.reply_text(
+                "Що було зроблено? (макс. 64 символи)",
+                reply_markup=keyboard
+            )
     else:
         await update.message.reply_text(
             "Що було зроблено? (макс. 64 символи)",
@@ -391,10 +398,17 @@ async def work_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     work_text = query.data.split(":")[1]
     if work_text == "manual":
-        await query.edit_message_text(
-            "Введіть, що було зроблено (макс. 64 символи):",
-            reply_markup=None  # Видаляємо клавіатуру для ручного вводу
-        )
+        try:
+            await query.edit_message_text(
+                "Введіть, що було зроблено (макс. 64 символи):",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except Exception as e:
+            logger.error(f"Error editing message: {e}")
+            await query.message.reply_text(
+                "Введіть, що було зроблено (макс. 64 символи):",
+                reply_markup=ReplyKeyboardRemove()
+            )
         return WORK
     
     # Перевіряємо довжину тексту роботи
@@ -430,14 +444,23 @@ async def work_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def ask_for_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Запитує додатковий опис"""
+    message_text = "Бажаєте додати додатковий опис?"
+    
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "Бажаєте додати додатковий опис?",
-            reply_markup=DESCRIPTION_MARKUP
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                message_text,
+                reply_markup=DESCRIPTION_MARKUP
+            )
+        except Exception as e:
+            logger.error(f"Error editing message: {e}")
+            await update.callback_query.message.reply_text(
+                message_text,
+                reply_markup=DESCRIPTION_MARKUP
+            )
     else:
         await update.message.reply_text(
-            "Бажаєте додати додатковий опис?",
+            message_text,
             reply_markup=DESCRIPTION_MARKUP
         )
 
@@ -480,10 +503,17 @@ async def save_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         message_text += f"\nДодатковий опис: {context.user_data['description']}"
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message_text,
-            reply_markup=keyboard
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                message_text,
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            logger.error(f"Error editing message: {e}")
+            await update.callback_query.message.reply_text(
+                message_text,
+                reply_markup=keyboard
+            )
     else:
         await update.message.reply_text(
             message_text,
@@ -503,10 +533,14 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("❌ Файл даних не знайдено")
         return
     
-    await update.message.reply_document(
-        document=open(CSV_FILE, 'rb'),
-        filename='service_records.csv'
-    )
+    try:
+        await update.message.reply_document(
+            document=open(CSV_FILE, 'rb'),
+            filename='service_records.csv'
+        )
+    except Exception as e:
+        logger.error(f"Error exporting data: {e}")
+        await update.message.reply_text("❌ Помилка при експорті даних")
 
 async def upload_csv_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Починає процес завантаження CSV файлу"""
@@ -528,9 +562,9 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if update.message.text and update.message.text.strip() == "🔙 Назад":
         return await back_to_menu(update, context)
     
-    if not update.message.document:
+    if not update.message.document or not update.message.document.file_name.lower().endswith('.csv'):
         await update.message.reply_text(
-            "Будь ласка, надішліть CSV файл або натисніть '🔙 Назад'",
+            "Будь ласка, надішліть CSV файл (розширення .csv) або натисніть '🔙 Назад'",
             reply_markup=UPLOAD_MARKUP
         )
         return UPLOAD_CSV
@@ -538,11 +572,11 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         # Завантажуємо файл у тимчасову директорію
         file = await context.bot.get_file(update.message.document.file_id)
-        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-            await file.download_to_drive(temp_file.name)
+        temp_file_path = os.path.join(tempfile.gettempdir(), update.message.document.file_name)
+        await file.download_to_drive(temp_file_path)
         
         # Намагаємось замінити дані
-        if CSVManager.replace_data(temp_file.name):
+        if CSVManager.replace_data(temp_file_path):
             await update.message.reply_text("✅ Дані успішно оновлено!", reply_markup=OWNER_MENU)
         else:
             await update.message.reply_text(
@@ -552,7 +586,7 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         # Видаляємо тимчасовий файл
         try:
-            os.unlink(temp_file.name)
+            os.unlink(temp_file_path)
         except Exception as e:
             logger.error(f"Помилка видалення тимчасового файлу: {e}")
     
