@@ -7,16 +7,18 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove
+    ReplyKeyboardRemove,
+    Document
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
 import datetime
+import tempfile
 
 # Константи
-MODEL, VIN, WORK, DESCRIPTION = range(4)
+MODEL, VIN, WORK, DESCRIPTION, UPLOAD_CSV = range(5)
 CSV_FILE = "/data/records.csv"
 RECENT_ITEMS_LIMIT = 5
 MAX_WORK_LENGTH = 64  # Максимальная длина основного описания работы в байтах
@@ -27,7 +29,7 @@ OTHER_MODELS = ["Rivian R1T", "Rivian R1S", "Lucid Air", "Zeekr 001", "Zeekr 007
 
 # Список спеціальних команд
 SPECIAL_COMMANDS = [
-    "➕ Додати запис", "📤 Завантажити дані",
+    "➕ Додати запис", "📤 Завантажити дані", "📥 Завантажити таблицю",
     "🔙 Назад", "✅ Так", "❌ Ні", "⏩ Пропустити"
 ]
 
@@ -58,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 # Клавіатури
 OWNER_MENU = ReplyKeyboardMarkup(
-    [["➕ Додати запис"], ["📤 Завантажити дані"]],
+    [["➕ Додати запис"], ["📤 Завантажити дані", "📥 Завантажити таблицю"]],
     resize_keyboard=True
 )
 
@@ -69,11 +71,6 @@ MANAGER_MENU = ReplyKeyboardMarkup(
 
 WORKER_MENU = ReplyKeyboardMarkup(
     [["➕ Додати запис"]],
-    resize_keyboard=True
-)
-
-CONFIRM_MARKUP = ReplyKeyboardMarkup(
-    [["✅ Так", "❌ Ні"], ["🔙 Назад"]],
     resize_keyboard=True
 )
 
@@ -132,6 +129,27 @@ class CSVManager:
                 user_level
             ])
         return next_id
+    
+    @staticmethod
+    def replace_data(new_data_path: str) -> bool:
+        try:
+            # Validate the new file
+            with open(new_data_path, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames or set(reader.fieldnames) != set(CSVManager.HEADERS):
+                    return False
+                
+                # Make a backup
+                backup_path = f"{CSV_FILE}.bak"
+                if os.path.exists(CSV_FILE):
+                    os.replace(CSV_FILE, backup_path)
+                
+                # Replace the file
+                os.replace(new_data_path, CSV_FILE)
+                return True
+        except Exception as e:
+            logger.error(f"Error replacing CSV file: {e}")
+            return False
 
 def get_user_level(username: str) -> Optional[str]:
     """Повертає рівень доступу користувача"""
@@ -219,6 +237,7 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return MODEL
     
+    # Для власників і менеджерів показуємо вибір виконавця
     if user_level == "owner":
         executors = {**OWNERS, **MANAGERS, **WORKERS}
     else:  # manager
@@ -243,6 +262,24 @@ async def add_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Оберіть виконавця:",
         reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    return MODEL
+
+async def executor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє вибір виконавця"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "back":
+        return await back_to_menu(update, context)
+    
+    _, user_id, name = query.data.split(":", 2)
+    context.user_data["executor"] = user_id
+    context.user_data["executor_name"] = name
+    
+    await query.edit_message_text(
+        "Виберіть модель авто:",
+        reply_markup=create_model_keyboard(TESLA_MODELS)
     )
     return MODEL
 
@@ -462,6 +499,61 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         filename='service_records.csv'
     )
 
+async def upload_csv_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Починає процес завантаження CSV файлу"""
+    username = f"@{update.effective_user.username}"
+    if get_user_level(username) != "owner":
+        await update.message.reply_text("⛔ У вас немає прав для цієї дії")
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "Будь ласка, надішліть CSV файл для завантаження. "
+        "Файл повинен мати такі стовпці:\n" +
+        ", ".join(CSVManager.HEADERS),
+        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+    )
+    return UPLOAD_CSV
+
+async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обробляє завантажений CSV файл"""
+    if update.message.document:
+        document = update.message.document
+    elif update.message.text and update.message.text.strip() == "🔙 Назад":
+        return await back_to_menu(update, context)
+    else:
+        await update.message.reply_text("Будь ласка, надішліть CSV файл.")
+        return UPLOAD_CSV
+    
+    try:
+        # Скачиваем файл во временную директорию
+        file = await context.bot.get_file(document.file_id)
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            await file.download_to_drive(temp_file.name)
+        
+        # Пытаемся заменить данные
+        if CSVManager.replace_data(temp_file.name):
+            await update.message.reply_text("✅ Дані успішно оновлено!", reply_markup=OWNER_MENU)
+        else:
+            await update.message.reply_text(
+                "❌ Помилка: файл має неправильний формат. Перевірте структуру.",
+                reply_markup=OWNER_MENU
+            )
+        
+        # Удаляем временный файл
+        try:
+            os.unlink(temp_file.name)
+        except Exception as e:
+            logger.error(f"Error deleting temp file: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error processing CSV upload: {e}")
+        await update.message.reply_text(
+            "❌ Помилка при обробці файлу. Спробуйте ще раз.",
+            reply_markup=OWNER_MENU
+        )
+    
+    return ConversationHandler.END
+
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обробляє текстові повідомлення"""
     username = f"@{update.effective_user.username}"
@@ -478,6 +570,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await add_record(update, context)
         elif text == "📤 Завантажити дані" and user_level == "owner":
             await export_data(update, context)
+        elif text == "📥 Завантажити таблицю" and user_level == "owner":
+            await upload_csv_start(update, context)
         elif text == "🔙 Назад":
             await back_to_menu(update, context)
         return
@@ -492,6 +586,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await work_manual(update, context)
         elif current_state.get('state') == DESCRIPTION:
             await handle_description(update, context)
+        elif current_state.get('state') == UPLOAD_CSV:
+            await handle_csv_upload(update, context)
     else:
         await update.message.reply_text("Оберіть дію з меню")
 
@@ -519,6 +615,7 @@ def main() -> None:
         states={
             MODEL: [
                 CallbackQueryHandler(model_selected, pattern="^model:"),
+                CallbackQueryHandler(executor_selected, pattern="^executor:"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, model_manual),
             ],
             VIN: [
@@ -531,6 +628,9 @@ def main() -> None:
             ],
             DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description),
+            ],
+            UPLOAD_CSV: [
+                MessageHandler(filters.TEXT | filters.Document.ALL, handle_csv_upload),
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
