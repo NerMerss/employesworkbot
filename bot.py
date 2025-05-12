@@ -662,7 +662,8 @@ def main() -> None:
     
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
-    
+    app.add_handler(MessageHandler(filters.Document.FileExtension("csv"), handle_csv_upload))
+
     logger.info("Бот запущений...")
     app.run_polling()
 
